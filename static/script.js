@@ -31,4 +31,3 @@ stopButton.addEventListener("click", function () {
     startButton.disabled = false;
     stopButton.disabled = true;
 });
-

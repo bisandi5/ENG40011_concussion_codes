@@ -1,38 +1,140 @@
+* {
+    box-sizing: border-box;
+}
+
 body {
-    font-family: Arial, sans-serif;
-    background: #edf2f7;
-    color: #18334e;
     margin: 0;
-    padding: 24px;
+    padding: 40px 24px;
+    font-family: "Segoe UI", Arial, sans-serif;
+    background: #eef3f8;
+    color: #18334e;
 }
 
 main {
-    max-width: 850px;
-    margin: auto;
+    width: 100%;
+    margin: 0;
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 20px;
+}
+
+main > h1,
+main > p {
+    grid-column: 1 / -1;
+    margin: 0;
+}
+
+h1 {
+    font-size: 36px;
+    letter-spacing: -1px;
+}
+
+main > p {
+    color: #526579;
+    margin-bottom: 8px;
 }
 
 section {
     background: white;
-    padding: 24px;
-    margin-top: 18px;
-    border-radius: 14px;
+    padding: 28px;
+    border: 1px solid #dce5ee;
+    border-radius: 18px;
+    box-shadow: 0 6px 20px rgba(24, 51, 78, 0.05);
+}
+
+section:first-of-type {
+    grid-column: 1 / -1;
+    border-top: 5px solid #176b87;
+}
+
+h2 {
+    margin-top: 0;
+    font-size: 20px;
+}
+
+section p {
+    line-height: 1.6;
+    color: #526579;
+}
+
+#recording-status,
+#elapsed-time {
+    color: #18334e;
+    font-weight: 700;
 }
 
 button {
-    padding: 12px 18px;
-    margin: 4px;
-    border-radius: 8px;
     border: none;
-}
-
-button {
+    border-radius: 10px;
+    padding: 13px 22px;
+    margin: 6px 8px 0 0;
     background: #176b87;
     color: white;
+    font: inherit;
+    font-weight: 600;
     cursor: pointer;
 }
 
+button:hover:not(:disabled) {
+    background: #10536a;
+}
+
+#stop-button:not(:disabled) {
+    background: #b42336;
+}
+
+#stop-button:hover:not(:disabled) {
+    background: #911c2b;
+}
+
 button:disabled {
-    background: #d5dde5;
+    background: #e3e9ef;
     color: #586779;
     cursor: not-allowed;
+}
+
+button:focus-visible {
+    outline: 3px solid #176b87;
+    outline-offset: 4px;
+}
+
+@media (max-width: 650px) {
+    body {
+        padding: 24px 16px;
+    }
+
+    main {
+        grid-template-columns: 1fr;
+    }
+
+    h1 {
+        font-size: 28px;
+    }
+
+    section {
+        padding: 22px;
+    }
+}
+
+.sensor-status {
+    display: inline-block;
+    padding: 6px 12px;
+    border-radius: 20px;
+    font-size: 14px;
+    font-weight: 600;
+}
+
+.sensor-status.disconnected {
+    background: #edf0f4;
+    color: #526173;
+}
+
+.sensor-status.waiting {
+    background: #fff3cd;
+    color: #775900;
+}
+
+.sensor-status.reading {
+    background: #dcf5e7;
+    color: #17643b;
 }
