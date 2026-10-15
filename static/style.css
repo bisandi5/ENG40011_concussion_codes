@@ -1,0 +1,38 @@
+body {
+    font-family: Arial, sans-serif;
+    background: #edf2f7;
+    color: #18334e;
+    margin: 0;
+    padding: 24px;
+}
+
+main {
+    max-width: 850px;
+    margin: auto;
+}
+
+section {
+    background: white;
+    padding: 24px;
+    margin-top: 18px;
+    border-radius: 14px;
+}
+
+button {
+    padding: 12px 18px;
+    margin: 4px;
+    border-radius: 8px;
+    border: none;
+}
+
+button {
+    background: #176b87;
+    color: white;
+    cursor: pointer;
+}
+
+button:disabled {
+    background: #d5dde5;
+    color: #586779;
+    cursor: not-allowed;
+}

@@ -1,0 +1,45 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Headband Dashboard</title>
+    <link rel="stylesheet"
+          href="{{ url_for('static', filename='style.css') }}">
+</head>
+<body>
+    <main>
+        <h1>Headband Dashboard</h1>
+        <p>Prototype interface — sensors are not connected.</p>
+
+        <section>
+            <h2>Recording</h2>
+            <p>UI demo — sensors are not connected.</p>
+
+            <p>Status: <strong id="recording-status">Waiting</strong></p>
+            <p>Elapsed time: <span id="elapsed-time">0</span> seconds</p>
+
+            <button id="start-button" type="button">Start recording</button>
+            <button id="stop-button" type="button" disabled>Stop recording</button>
+        </section>
+
+        <section>
+            <h2>Heart-rate sensor</h2>
+            <p>Heart rate: — BPM</p>
+            <p>HRV: — ms</p>
+        </section>
+
+        <section>
+            <h2>Accelerometer</h2>
+            <p>X: — | Y: — | Z: —</p>
+        </section>
+
+        <section>
+            <h2>Eye camera</h2>
+            <p>Status: Not connected</p>
+        </section>
+    </main>
+
+    <script src="{{ url_for('static', filename='script.js') }}"></script>
+</body>
+</html>
