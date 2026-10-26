@@ -4,54 +4,75 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>Headband Dashboard</title>
-    <link rel="stylesheet"
-          href="{{ url_for('static', filename='style.css') }}">
+    <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
 </head>
 <body>
-    <main>
-        <h1>Headband Dashboard</h1>
-        <p>Prototype interface — sensors are not connected.</p>
+<main>
+    <h1>Headband Dashboard</h1>
+    <p>Record fingertip pulse data from the sensor connected to the Raspberry Pi.</p>
 
-        <section>
-            <h2>Recording</h2>
-            <p>UI demo — sensors are not connected.</p>
+    <section aria-labelledby="recording-title">
+        <h2 id="recording-title">Heart-rate recording</h2>
+        <p>Support your hand and rest your finger gently on the sensor. Keep it in place until capture finishes.</p>
+        <p>10 seconds settling + 60 seconds recording. Analysis follows automatically.</p>
+        <p>Status: <strong id="recording-status" aria-live="polite">Waiting</strong></p>
+        <p>Elapsed time: <span id="elapsed-time">0</span> seconds</p>
+        <progress id="hrv-progress" max="7000" value="0" aria-label="Pulse capture progress"></progress>
+        <p id="hrv-instruction">Start when you are ready.</p>
+        <button id="start-button" type="button" disabled>Start HRV test</button>
+        <button id="stop-button" type="button" disabled>Cancel HRV test</button>
+        <p id="hrv-command-error" class="error" role="alert"></p>
+        <p id="hrv-error" class="error" role="alert"></p>
+    </section>
 
-            <p>Status: <strong id="recording-status">Waiting</strong></p>
-            <p>Elapsed time: <span id="elapsed-time">0</span> seconds</p>
+    <section>
+        <h2>Heart-rate sensor</h2>
+        <span id="heart-status" class="sensor-status disconnected">Not checked</span>
+        <p>Samples captured, including settling: <strong id="captured-samples">0</strong></p>
+        <p>Recording samples: <strong id="recorded-samples">0</strong> / 6000</p>
+        <p>Latest raw infrared: <strong id="raw-ir">—</strong> ADC counts</p>
+        <p>Latest raw red: <strong id="raw-red">—</strong> ADC counts</p>
+        <p>Raw counts confirm data is arriving; they are not pulse rate.</p>
+    </section>
 
-            <button id="start-button" type="button">Start recording</button>
-            <button id="stop-button" type="button" disabled>Stop recording</button>
-        </section>
+    <section>
+        <h2>HRV / pulse variability result</h2>
+        <p id="hrv-result-message" aria-live="polite">No test completed yet.</p>
+        <p>Pulse-rate estimate: <strong id="pulse-rate">—</strong> BPM</p>
+        <p>PRV RMSSD estimate: <strong id="rmssd">—</strong> ms</p>
+        <p>Selected continuous duration: <strong id="selected-duration">—</strong> seconds</p>
+        <p>Longest usable section: <strong id="longest-duration">—</strong> seconds</p>
+        <ul id="hrv-reasons"></ul>
+        <p>Experimental pulse measurements; accuracy validation remains incomplete.</p>
+    </section>
 
-        <section>
-            <h2>Heart-rate sensor</h2>
-            <span id="heart-status" class="sensor-status disconnected">
-                Not connected
-            </span>
+    <section>
+        <h2>Saved recording</h2>
+        <p id="save-status">Files will appear here after capture.</p>
+        <ul id="hrv-downloads"></ul>
+        <p id="run-id"></p>
+    </section>
 
-            <p>Heart rate: — BPM</p>
-            <p>HRV: — ms</p>
-        </section>
+    <section>
+        <h2>Accelerometer</h2>
+        <span class="sensor-status disconnected">Not integrated</span>
+        <p>X: — | Y: — | Z: —</p>
+    </section>
 
-        <section>
-            <h2>Accelerometer</h2>
-            <span id="accelerometer-status" class="sensor-status disconnected">
-                Not connected
-            </span>
-
-            <p>X: — | Y: — | Z: —</p>
-        </section>
-
-        <section>
-            <h2>Eye camera</h2>
-            <span id="camera-status" class="sensor-status disconnected">
-                Not connected
-            </span>
-
-            <p>No camera data available.</p>
-        </section>
-    </main>
-
-    <script src="{{ url_for('static', filename='script.js') }}"></script>
+    <section class="wide">
+        <h2>Eye camera</h2>
+        <span id="camera-status" class="sensor-status disconnected">Not checked</span>
+        <p id="camera-instruction">Camera controls are separate from the HRV test.</p>
+        <button id="camera-start" type="button" disabled>Start camera</button>
+        <button id="camera-next" type="button" disabled>Continue eye test</button>
+        <button id="camera-stop" type="button" disabled>Stop camera</button>
+        <p id="camera-command-error" class="error" role="alert"></p>
+        <p id="camera-error" class="error" role="alert"></p>
+        <img id="camera-preview" alt="Live preview from the Pi camera" hidden>
+        <p>Pupil estimate: <strong id="camera-pupil">—</strong> mm | Blink rate: <strong id="camera-blink">—</strong> blinks/min</p>
+        <p>Camera processing uses your existing camera_web.py.</p>
+    </section>
+</main>
+<script src="{{ url_for('static', filename='script.js') }}"></script>
 </body>
 </html>
