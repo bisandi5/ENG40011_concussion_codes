@@ -1,5 +1,6 @@
 """Live MAX30102 pulse variability prototype; no simulated readings.
-Engineering quality checks below are provisional, not clinical validation.
+Version 2: infrared-led detection, section checks and diagnostic graph.
+Engineering checks are provisional. A result is not validated HRV or a diagnosis.
 """
 import argparse
 import csv
@@ -10,7 +11,7 @@ from datetime import datetime
 from pathlib import Path
 
 import numpy as np
-from scipy.signal import butter, sosfiltfilt, find_peaks
+from scipy.signal import butter, sosfiltfilt, find_peaks, welch
 
 FS = 100
 
@@ -105,85 +106,241 @@ def record(duration=60, settling=10):
     return rows, measured, metadata
 
 
-def detect(values, prominence_scale=0.5):
-    signal = sosfiltfilt(butter(3, [0.5, 5], fs=FS, btype='bandpass', output='sos'), values)
-    # Exclude filter edges. No intervals are stitched across rejected sections.
-    signal = signal[2 * FS:-2 * FS]
-    scale = np.median(np.abs(signal - np.median(signal))) * 1.4826
-    if scale < 5:  # ADC counts: provisional flat-signal check.
-        raise ValueError('Pulse signal is too small or flat.')
-    peaks, _ = find_peaks(signal, distance=int(0.3 * FS), prominence=scale * prominence_scale)
-    return peaks, signal
+# These are engineering thresholds for a resting fingertip prototype.
+# They are NOT normal/abnormal HRV limits and have not been clinically validated.
+VERSION = 'finger-prv-2'
+MIN_RUN_SECONDS = 30.0
+MIN_INTERVALS = 30
+SECTION_SECONDS = 10
+
+
+def robust_scale(x):
+    return float(1.4826 * np.median(np.abs(x - np.median(x))))
+
+
+def period_estimate(x):
+    """Spectral estimate guides a local autocorrelation search (samples)."""
+    x = np.asarray(x, dtype=float) - np.mean(x)
+    freq, power = welch(x, FS, nperseg=min(len(x), 1000))
+    valid = (freq >= 0.65) & (freq <= 3.0)
+    if not valid.any() or power[valid].max() <= 0:
+        return None, 0.0
+    spectral_period = FS / float(freq[valid][np.argmax(power[valid])])
+    lags = np.arange(max(30, int(0.8 * spectral_period)),
+                     min(len(x) // 2, int(1.2 * spectral_period)) + 1)
+    correlations = []
+    for lag in lags:
+        a, b = x[:-lag], x[lag:]
+        if np.std(a) < 1e-8 or np.std(b) < 1e-8:
+            correlations.append(0.0)
+        else:
+            correlations.append(float(np.corrcoef(a, b)[0, 1]))
+    if not len(lags):
+        return None, 0.0
+    best = int(np.argmax(correlations))
+    return int(lags[best]), correlations[best]
+
+
+def matched(peaks, alternative, tolerance=4):
+    if len(alternative) == 0:
+        return np.zeros(len(peaks), dtype=bool)
+    return np.min(abs(peaks[:, None] - alternative[None, :]), axis=1) <= tolerance
+
+
+def contiguous_runs(mask):
+    padded = np.r_[False, mask, False].astype(int)
+    return list(zip(np.flatnonzero(np.diff(padded) == 1),
+                    np.flatnonzero(np.diff(padded) == -1)))
 
 
 def analyse(red, ir):
-    reasons = []
-    result = {'status': 'insufficient_signal_quality', 'reasons': reasons,
-              'pulse_rate_bpm': None, 'rmssd_ms': None,
-              'measurement': 'PPG pulse-rate variability (PRV)',
-              'quality_rules': 'provisional engineering checks; not validated',
-              'score': None}
+    """No interval correction/interpolation and no joining across rejected gaps."""
+    red, ir = np.asarray(red, dtype=float), np.asarray(ir, dtype=float)
+    result = dict(version=VERSION, status='insufficient_signal_quality',
+                  measurement='Fingertip PPG pulse-rate variability (PRV)',
+                  pulse_rate_bpm=None, rmssd_ms=None, score=None,
+                  analysed_seconds=len(ir) / FS, selected_seconds=0.0,
+                  reasons=[], warnings=[], sections=[],
+                  quality_rules='Provisional engineering rules; accuracy not established',
+                  minimum_contiguous_seconds=MIN_RUN_SECONDS,
+                  minimum_intervals=MIN_INTERVALS)
+    diagnostics = dict(peaks=np.array([], dtype=int), intervals=[], filtered=np.array([]),
+                       raw_ir=ir, raw_red=red, selected_start=None, selected_end=None)
+    if len(ir) != len(red) or len(ir) < 55 * FS:
+        result['reasons'].append('Need at least 55 seconds of paired red/infrared data.')
+        return result, diagnostics
+    if not np.isfinite(ir).all() or not np.isfinite(red).all():
+        result['reasons'].append('Missing/non-finite samples. Do not join across missing data.')
+        return result, diagnostics
+    # Fixed processing pipeline, used unchanged for all source recordings.
+    sos = butter(3, [0.7, 3.5], fs=FS, btype='bandpass', output='sos')
+    filtered = sosfiltfilt(sos, ir)
+    red_filtered = sosfiltfilt(sos, red)
+    diagnostics['filtered'] = filtered
+    good_samples = np.zeros(len(ir), dtype=bool)
+    all_peaks = []
+    peak_stability = {}
+    sample_period = np.zeros(len(ir))
+    size = SECTION_SECONDS * FS
+    for core_start in range(0, len(ir), size):
+        core_end = min(len(ir), core_start + size)
+        # Filter-edge exclusion; process adjacent context to avoid bin-edge peaks.
+        start = max(2 * FS, core_start)
+        end = min(len(ir) - 2 * FS, core_end)
+        section = dict(start_s=start / FS, end_s=end / FS, accepted=False, reasons=[])
+        if end <= start:
+            continue
+        left, right = max(2 * FS, start - FS), min(len(ir) - 2 * FS, end + FS)
+        x = filtered[left:right]
+        scale = robust_scale(x)
+        period, periodicity = period_estimate(x)
+        section.update(periodicity=round(float(periodicity), 3), pulse_scale_adc=round(scale, 2))
+        raw = ir[start:end]
+        if np.any((raw <= 0) | (raw >= 262143)):
+            section['reasons'].append('Clipped/zero infrared samples.')
+        if scale < 5:
+            section['reasons'].append('Infrared waveform is too small or flat.')
+        if period is None or periodicity < 0.5:
+            section['reasons'].append('No sufficiently repeatable pulse pattern.')
+        # Red informs the report, but weak red peaks do not veto clean IR.
+        red_segment = red_filtered[start:end]
+        ir_segment = filtered[start:end]
+        correlation = None
+        if np.std(red_segment) > 1e-8 and np.std(ir_segment) > 1e-8:
+            correlation = float(np.corrcoef(red_segment, ir_segment)[0, 1])
+        section['red_ir_correlation'] = correlation
+        if period is not None and scale >= 5:
+            distance = max(30, int(0.60 * period))
+            candidates = []
+            for factor in (0.3, 0.5, 0.8):
+                p, _ = find_peaks(x, distance=distance, prominence=factor * scale)
+                candidates.append(p + left)
+            p = candidates[1]
+            stable = matched(p, candidates[0]) & matched(p, candidates[2])
+            core = (p >= start) & (p < end)
+            for position, is_stable in zip(p[core], stable[core]):
+                all_peaks.append(int(position))
+                peak_stability[int(position)] = bool(is_stable)
+            section['candidate_pulses'] = int(core.sum())
+            section['stable_pulse_fraction'] = float(np.mean(stable[core])) if core.any() else 0.0
+            if not core.any() or np.mean(stable[core]) < 0.9:
+                section['reasons'].append('Pulse detections change with threshold.')
+            sample_period[start:end] = period
+        section['accepted'] = not section['reasons']
+        if section['accepted']:
+            good_samples[start:end] = True
+        result['sections'].append(section)
+    peaks = np.array(sorted(set(all_peaks)), dtype=int)
+    diagnostics['peaks'] = peaks
+    result['candidate_pulse_count'] = int(len(peaks))
+    # Two peak-search contexts can disagree near a section boundary.
+    # Mark conflicting neighbours as uncertain; do not silently merge them.
+    conflicts = set()
+    for a, b in zip(peaks[:-1], peaks[1:]):
+        if b - a < 30:
+            conflicts.update((int(a), int(b)))
     intervals = []
+    for index, (a, b) in enumerate(zip(peaks[:-1], peaks[1:])):
+        length = int(b - a)
+        expected = float(np.median(sample_period[a:b])) if length else 0
+        reasons = []
+        if not good_samples[a:b + 1].all():
+            reasons.append('Interval crosses an uncertain signal section.')
+        if not peak_stability.get(int(a)) or not peak_stability.get(int(b)):
+            reasons.append('A pulse endpoint is threshold-sensitive.')
+        if int(a) in conflicts or int(b) in conflicts:
+            reasons.append('Conflicting detections near a section boundary.')
+        if expected <= 0 or not (0.60 * expected <= length <= 1.45 * expected):
+            reasons.append('Interval inconsistent with local pulse period.')
+        if not 30 <= length <= 180:
+            reasons.append('Interval outside supported detector range.')
+        intervals.append(dict(interval_index=index, start_s=float(a / FS), end_s=float(b / FS),
+                              interval_ms=float(length * 1000 / FS),
+                              accepted=not reasons, selected=False, reasons=reasons))
+    # Flag local outliers without deleting them and stitching their neighbours.
+    lengths = np.array([i['interval_ms'] for i in intervals])
+    for index, item in enumerate(intervals):
+        neighbourhood = lengths[max(0, index - 4):index + 5]
+        typical = float(np.median(neighbourhood))
+        if typical > 0 and abs(item['interval_ms'] - typical) > 0.25 * typical:
+            item['accepted'] = False
+            item['reasons'].append('Interval differs from neighbouring pulse spacing.')
+    diagnostics['intervals'] = intervals
+    runs = contiguous_runs([i['accepted'] for i in intervals])
+    if runs:
+        first, last = max(runs, key=lambda run: sum(i['interval_ms'] for i in intervals[run[0]:run[1]]))
+        chosen = intervals[first:last]
+        seconds = sum(i['interval_ms'] for i in chosen) / 1000
+        result['longest_usable_run_seconds'] = round(seconds, 2)
+        if seconds >= MIN_RUN_SECONDS and len(chosen) >= MIN_INTERVALS:
+            for item in chosen:
+                item['selected'] = True
+            result.update(calculate_variability([i['interval_ms'] for i in chosen]))
+            result.update(status='prototype_segment_estimate', selected_seconds=round(seconds, 2),
+                          selected_start_s=chosen[0]['start_s'], selected_end_s=chosen[-1]['end_s'])
+            diagnostics.update(selected_start=chosen[0]['start_s'], selected_end=chosen[-1]['end_s'])
+            result['warnings'].append('Result uses only the selected continuous section, not the complete recording.')
+    if result['rmssd_ms'] is None:
+        result['reasons'].append(f'No continuous accepted section of at least {MIN_RUN_SECONDS:g}s and {MIN_INTERVALS} intervals.')
+    if any(s['red_ir_correlation'] is not None and s['red_ir_correlation'] < 0.8 for s in result['sections']):
+        result['warnings'].append('Red/infrared agreement is weak in some sections. Check the diagnostic graph.')
+    result['warnings'].append('Checks cannot prove beat accuracy. Compare with reference beat intervals before relying on RMSSD.')
+    return result, diagnostics
+
+
+def save_plot(prefix, diagnostics, result):
     try:
-        if len(ir) < 55 * FS:
-            raise ValueError('Less than 55 seconds of recorded data.')
-        for values in (red, ir):
-            if not np.isfinite(values).all():
-                raise ValueError('Non-finite raw samples.')
-            if np.mean((values <= 0) | (values >= 262143)) > 0.001:
-                raise ValueError('Raw signal is clipped or zero.')
-        peaks, filtered = detect(ir)
-        red_peaks, red_filtered = detect(red)
-        if len(peaks) < 25 or len(red_peaks) < 25:
-            raise ValueError('Too few candidate pulses.')
-        intervals = (np.diff(peaks) * 1000 / FS).tolist()
-        median_interval = float(np.median(intervals))
-        # Broad detector limits, not definitions of normal/abnormal health.
-        if any(v < 300 or v > 2000 for v in intervals):
-            reasons.append('Candidate intervals outside the detector range.')
-        if np.any(np.abs(np.asarray(intervals) - median_interval) > 0.25 * median_interval):
-            reasons.append('Inconsistent pulse spacing: artifacts or missed/extra beats possible.')
-        def agreement(a, b):
-            nearest = np.min(np.abs(a[:, None] - b[None, :]), axis=1)
-            return float(np.mean(nearest <= 8))  # 80 ms channel timing tolerance.
-        match = min(agreement(peaks, red_peaks), agreement(red_peaks, peaks))
-        result['red_ir_peak_agreement'] = match
-        if match < 0.90:
-            reasons.append('Red and infrared pulse detections disagree.')
-        if np.corrcoef(filtered, red_filtered)[0, 1] < 0.8:
-            reasons.append('Red and infrared pulse waveforms disagree.')
-        amplitudes = [np.std(filtered[i:i + 5 * FS]) for i in range(0, len(filtered) - 5 * FS + 1, 5 * FS)]
-        if min(amplitudes) <= 0 or max(amplitudes) > 5 * min(amplitudes):
-            reasons.append('Large pulse-amplitude changes suggest unstable contact.')
-        stats = calculate_variability(intervals)
-        # A different reasonable peak threshold should not change the answer greatly.
-        for factor in (0.3, 0.8):
-            other, _ = detect(ir, factor)
-            other_intervals = np.diff(other) * 1000 / FS
-            if len(other_intervals) < 3:
-                reasons.append('Pulse detection is sensitive to its threshold.')
-                break
-            other_stats = calculate_variability(other_intervals.tolist())
-            if abs(len(other) - len(peaks)) > 1 or abs(other_stats['rmssd_ms'] - stats['rmssd_ms']) > max(10, 0.2 * stats['rmssd_ms']):
-                reasons.append('Pulse detection is sensitive to its threshold.')
-                break
-        result['candidate_pulse_count'] = len(peaks)
-        if not reasons:
-            result.update(stats)
-            result['status'] = 'prototype_quality_checks_passed'
-    except ValueError as exc:
-        reasons.append(str(exc))
-    return result, intervals
+        import matplotlib
+        matplotlib.use('Agg')
+        import matplotlib.pyplot as plt
+    except ImportError:
+        return 'Graph unavailable: install python3-matplotlib.'
+    ir = diagnostics['raw_ir']
+    filtered = diagnostics['filtered']
+    count = len(ir)
+    if not count:
+        return 'No samples to plot.'
+    rows = 1 + math.ceil(count / (10 * FS))
+    fig, axes = plt.subplots(rows, 1, figsize=(13, 2.4 * rows))
+    t = np.arange(count) / FS
+    axes[0].plot(t, ir, color='#176b87', label='Raw infrared')
+    axes[0].set_title(f"{VERSION}: {result['status']} | no concussion score")
+    axes[0].set_ylabel('ADC counts')
+    axes[0].legend(loc='upper right')
+    for row, start in enumerate(range(0, count, 10 * FS), 1):
+        end = min(start + 10 * FS, count)
+        ax = axes[row]
+        if len(filtered) == count:
+            ax.plot(t[start:end], filtered[start:end], color='#18334e', lw=1)
+            for section in result['sections']:
+                if not section['accepted']:
+                    ax.axvspan(section['start_s'], section['end_s'], color='#b42336', alpha=0.1)
+            for item in diagnostics['intervals']:
+                if item['selected']:
+                    ax.axvspan(item['start_s'], item['end_s'], color='#16834b', alpha=0.18)
+            peaks = diagnostics['peaks']
+            p = peaks[(peaks >= start) & (peaks < end)]
+            ax.scatter(p / FS, filtered[p], s=14, color='#bd6b00', label='Candidate pulse')
+        ax.set_xlim(start / FS, end / FS)
+        ax.set_ylabel('Filtered ADC')
+        ax.set_xlabel('Seconds after settling')
+        ax.grid(alpha=0.2)
+    fig.text(0.02, 0.005, 'Orange dots: candidate pulses. Pale red: rejected sections. Green: continuous section used for estimate. Unshaded does not mean validated.', fontsize=9)
+    fig.tight_layout(rect=(0, 0.02, 1, 1))
+    path = Path(str(prefix) + '_pulses.png')
+    fig.savefig(path, dpi=130)
+    plt.close(fig)
+    return str(path)
 
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('--csv', type=Path, help='Analyse an existing red/ir CSV without hardware')
+    parser.add_argument('--csv', type=Path, help='Reanalyse an existing contiguous 100 Hz red/ir CSV; no new recording')
     args = parser.parse_args()
     output = Path(__file__).resolve().parent / 'recordings'
     output.mkdir(exist_ok=True)
     stamp = datetime.now().strftime('%Y%m%d_%H%M%S_%f')
-    prefix = output / f'prv_{stamp}'
+    prefix = output / f'prv_v2_{stamp}'
     if args.csv:
         with args.csv.open(newline='') as file:
             data = list(csv.DictReader(file))
@@ -194,41 +351,63 @@ def main():
             if any(b - a != 1 for a, b in zip(indices, indices[1:])):
                 raise ValueError('CSV sample indices are not contiguous.')
         measured = [(i, 0, float(r['red']), float(r['ir'])) for i, r in enumerate(data)]
-        metadata = {'source_csv': str(args.csv), 'nominal_sample_rate_hz': FS,
-                    'note': 'Assumes contiguous 100 Hz input; original acquisition must be checked.'}
+        metadata = dict(source_csv=str(args.csv.resolve()), nominal_sample_rate_hz=FS)
+        original_json = args.csv.with_suffix('.json')
+        if original_json.exists():
+            original = json.loads(original_json.read_text())
+            acquisition = original.get('acquisition', {})
+            if acquisition.get('nominal_sample_rate_hz', FS) != FS:
+                raise ValueError('This analyser supports only nominal 100 Hz CSV data.')
+            metadata.update(acquisition)
+        else:
+            metadata['note'] = 'Original capture metadata unavailable; assumes contiguous 100 Hz samples.'
+        print('Reanalysing saved CSV. No new sensor recording is made.')
     else:
         rows, measured, metadata = record()
-        with prefix.with_suffix('.csv').open('w', newline='') as file:
+        raw_file = prefix.with_suffix('.csv')
+        with raw_file.open('w', newline='') as file:
             writer = csv.writer(file)
             writer.writerow(['sample_index', 'host_read_elapsed_s', 'red', 'ir', 'phase'])
             for row in rows:
-                writer.writerow([*row, 'settling' if row[0] < 10 * FS else 'recording'])
-        print(f'Raw data saved: {prefix.with_suffix(".csv")}')
+                writer.writerow([*row, 'settling' if row[0] < metadata['settling_seconds'] * FS else 'recording'])
+        print('Raw recording saved:', raw_file)
+    red = np.asarray([r[2] for r in measured], dtype=float)
+    ir = np.asarray([r[3] for r in measured], dtype=float)
+    result, diagnostics = analyse(red, ir)
     if metadata.get('acquisition_error'):
-        result = dict(status='recording_failed', reasons=[metadata['acquisition_error']], pulse_rate_bpm=None, rmssd_ms=None, score=None)
-        intervals = []
-    else:
-        red = np.asarray([r[2] for r in measured], dtype=float)
-        ir = np.asarray([r[3] for r in measured], dtype=float)
-        result, intervals = analyse(red, ir)
+        result.update(status='recording_failed', pulse_rate_bpm=None, rmssd_ms=None, selected_seconds=0)
+        result['reasons'].insert(0, metadata['acquisition_error'])
+        for interval in diagnostics['intervals']:
+            interval['selected'] = False
     result['acquisition'] = metadata
+    result['placement'] = 'finger'
+    result['graph'] = save_plot(prefix, diagnostics, result)
     prefix.with_suffix('.json').write_text(json.dumps(result, indent=2, allow_nan=False))
-    with Path(str(prefix) + '_candidate_intervals.csv').open('w', newline='') as file:
-        writer = csv.writer(file)
-        writer.writerow(['interval_index', 'candidate_interval_ms', 'accepted_recording'])
-        for i, interval in enumerate(intervals):
-            writer.writerow([i, interval, result['status'] == 'prototype_quality_checks_passed'])
+    intervals_file = Path(str(prefix) + '_intervals.csv')
+    with intervals_file.open('w', newline='') as file:
+        fields = ['interval_index', 'start_s', 'end_s', 'interval_ms', 'accepted', 'selected', 'reasons']
+        writer = csv.DictWriter(file, fieldnames=fields)
+        writer.writeheader()
+        for item in diagnostics['intervals']:
+            writer.writerow({**item, 'reasons': '; '.join(item['reasons'])})
     print('\nRESULT:', result['status'])
-    if result.get('rmssd_ms') is not None:
-        print(f"Pulse rate: {result['pulse_rate_bpm']:.1f} BPM")
-        print(f"Pulse variability (RMSSD): {result['rmssd_ms']:.2f} ms")
-        print('Prototype estimate; quality checks do not establish accuracy.')
+    if result['rmssd_ms'] is not None:
+        print(f"Selected continuous section: {result['selected_start_s']:.2f}–{result['selected_end_s']:.2f}s ({result['selected_seconds']:.2f}s)")
+        print(f"Pulse-rate estimate: {result['pulse_rate_bpm']:.1f} BPM")
+        print(f"PRV RMSSD estimate: {result['rmssd_ms']:.2f} ms")
+        print('Prototype segment estimate; accuracy is not established.')
     else:
-        print('Pulse rate / RMSSD withheld:')
         for reason in result['reasons']:
             print(' -', reason)
+        print('Pulse rate and RMSSD withheld.')
+        print('Longest usable run:', result.get('longest_usable_run_seconds', 0), 'seconds')
+    for section in result['sections']:
+        if not section['accepted']:
+            print(f"Check {section['start_s']:.0f}-{section['end_s']:.0f}s: " + '; '.join(section['reasons']))
     print('Concussion score: not calculated.')
-    print('Results saved:', prefix.with_suffix('.json'))
+    print('JSON:', prefix.with_suffix('.json'))
+    print('Intervals:', intervals_file)
+    print('Graph:', result['graph'])
 
 
 if __name__ == '__main__':
