@@ -15,6 +15,7 @@ const instructions = {
 const pending = new Set();
 let hrvState = null;
 let cameraState = null;
+let accelState = null;
 let cameraWasRunning = false;
 
 function badge(id, text, type) {
@@ -37,16 +38,16 @@ function cameraButtons() {
 async function command(path, group) {
     if (pending.has(group)) return;
     pending.add(group);
-    hrvButtons(); cameraButtons();
-    const errorId = group === 'hrv' ? 'hrv-command-error' : 'camera-command-error';
+    hrvButtons(); cameraButtons(); accelButtons();
+    const errorId = group === 'hrv' ? 'hrv-command-error' : group === 'accel' ? 'accel-command-error' : 'camera-command-error';
     try {
         const response = await fetch(path, {method:'POST'});
         const data = await response.json();
         if (!response.ok) throw new Error(data.error || 'Request failed');
         byId(errorId).textContent = '';
-        await (group === 'hrv' ? pollHRV() : pollCamera());
+        await (group === 'hrv' ? pollHRV() : group === 'accel' ? pollAccelerometer() : pollCamera());
     } catch (error) { byId(errorId).textContent = error.message; }
-    finally { pending.delete(group); hrvButtons(); cameraButtons(); }
+    finally { pending.delete(group); hrvButtons(); cameraButtons(); accelButtons(); }
 }
 byId('start-button').onclick = () => command('/api/hrv/start', 'hrv');
 byId('stop-button').onclick = () => command('/api/hrv/stop', 'hrv');
@@ -137,8 +138,69 @@ async function pollCamera() {
         byId('camera-error').textContent = 'Camera controls unavailable. HRV can still be used if connected.';
     }
 }
+function accelButtons() {
+    const available = accelState !== null && !pending.has('accel');
+    byId('accel-start').disabled = !available || accelState.running;
+    byId('accel-stop').disabled = !available || !accelState.running || accelState.stage === 'stopping';
+}
+byId('accel-start').onclick = () => command('/api/accelerometer/start', 'accel');
+byId('accel-stop').onclick = () => command('/api/accelerometer/stop', 'accel');
+function renderAccelerometer(s) {
+    accelState = s;
+    byId('accel-stage').textContent = s.stage === 'countdown' ? 'Countdown: ' + s.countdown : stages[s.stage] || s.stage;
+    byId('accel-elapsed').textContent = format(s.elapsed_seconds);
+    byId('accel-progress').value = s.stage === 'complete' ? 20 : Math.min(20, s.recording_elapsed_seconds);
+    byId('accel-samples').textContent = s.sample_count;
+    byId('accel-x').textContent = format(s.x_g, 3);
+    byId('accel-y').textContent = format(s.y_g, 3);
+    byId('accel-z').textContent = format(s.z_g, 3);
+    byId('accel-error').textContent = s.error || '';
+    const tips = {idle:'Start when the sensor is ready.', starting:'Connecting to the accelerometer on the Pi…',
+        countdown:'Get ready: ' + s.countdown, recording:'Recording live X, Y and Z acceleration.',
+        saving:'Capture finished. Saving the recording…', stopping:'Waiting for capture to stop.',
+        cancelled:'Cancelled. No completed variability result.', complete:'Capture finished. Results and saved data are below.',
+        error:'Check the error message and Pi terminal.'};
+    byId('accel-instruction').textContent = tips[s.stage] || '';
+    badge('accelerometer-status', s.stage === 'error' ? 'Capture error' : s.stage === 'complete' ? 'Capture complete' :
+        s.stage === 'recording' ? 'Data arriving' : s.stage === 'idle' ? 'Not checked' : 'Waiting',
+        s.stage === 'recording' || s.stage === 'complete' ? 'reading' : s.stage === 'error' || s.stage === 'idle' ? 'disconnected' : 'waiting');
+    const r = s.result;
+    const complete = r && r.status === 'complete';
+    for (const [id, key] of Object.entries({'accel-x-sd':'x_sd_g','accel-y-sd':'y_sd_g','accel-z-sd':'z_sd_g','accel-combined':'combined_variability_g'})) {
+        byId(id).textContent = complete ? format(r[key], 5) : '—';
+    }
+    byId('accel-rate').textContent = r ? format(r.average_read_rate_hz) : '—';
+    byId('accel-gap').textContent = r ? format(r.largest_sample_gap_seconds, 3) : '—';
+    byId('accel-result-message').textContent = complete ? 'Movement variability calculated from this recording.' :
+        r?.status === 'cancelled' ? 'Cancelled: partial data is saved, with no variability result.' :
+        r?.status === 'error' ? 'Capture failed: partial data may be available below.' :
+        s.running ? 'Waiting for this recording’s result.' : 'No accelerometer test completed yet.';
+    byId('accel-warnings').replaceChildren();
+    for (const message of r?.warnings || []) {
+        const li = document.createElement('li'); li.textContent = message; byId('accel-warnings').append(li);
+    }
+    byId('accel-downloads').replaceChildren();
+    for (const [kind, url] of Object.entries(s.downloads)) {
+        const li = document.createElement('li'); const a = document.createElement('a');
+        a.href = url; a.download = ''; a.textContent = kind === 'raw' ? 'Acceleration readings (CSV)' : 'Result and timing details (JSON)';
+        li.append(a); byId('accel-downloads').append(li);
+    }
+    byId('accel-save-status').textContent = s.downloads.raw ? 'Data saved on the Pi. Download a copy here.' : 'Recording files will appear after capture.';
+    accelButtons();
+}
+async function pollAccelerometer() {
+    try {
+        const response = await fetch('/api/accelerometer/status', {cache:'no-store'});
+        if (!response.ok) throw new Error('Accelerometer status unavailable');
+        renderAccelerometer(await response.json());
+    } catch (error) {
+        accelState = null; accelButtons();
+        byId('accel-error').textContent = 'Cannot reach accelerometer controls. Check the Pi connection and Flask terminal.';
+        badge('accelerometer-status', 'Connection unavailable', 'disconnected');
+    }
+}
 async function poll() {
-    await Promise.allSettled([pollHRV(), pollCamera()]);
+    await Promise.allSettled([pollHRV(), pollCamera(), pollAccelerometer()]);
     setTimeout(poll, 500);
 }
 poll();

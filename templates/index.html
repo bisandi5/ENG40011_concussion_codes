@@ -53,10 +53,31 @@
         <p id="run-id"></p>
     </section>
 
-    <section>
-        <h2>Accelerometer</h2>
-        <span class="sensor-status disconnected">Not integrated</span>
-        <p>X: — | Y: — | Z: —</p>
+    <section class="wide">
+        <h2>Accelerometer movement recording</h2>
+        <span id="accelerometer-status" class="sensor-status disconnected">Not checked</span>
+        <p>3-second countdown followed by a 20-second recording. Secure the sensor before starting.</p>
+        <p>Status: <strong id="accel-stage" aria-live="polite">Waiting</strong> | Elapsed: <span id="accel-elapsed">0</span> seconds</p>
+        <p id="accel-instruction">Start when the sensor is ready.</p>
+        <progress id="accel-progress" max="20" value="0" aria-label="Accelerometer recording progress"></progress>
+        <button id="accel-start" type="button" disabled>Start accelerometer</button>
+        <button id="accel-stop" type="button" disabled>Cancel accelerometer</button>
+        <p id="accel-command-error" class="error" role="alert"></p>
+        <p id="accel-error" class="error" role="alert"></p>
+        <div class="axis-values">
+            <p>X: <strong id="accel-x">—</strong> g</p>
+            <p>Y: <strong id="accel-y">—</strong> g</p>
+            <p>Z: <strong id="accel-z">—</strong> g</p>
+        </div>
+        <p>Samples: <strong id="accel-samples">0</strong> | Average read rate: <strong id="accel-rate">—</strong> Hz</p>
+        <p id="accel-result-message" aria-live="polite">No accelerometer test completed yet.</p>
+        <p>Axis variability: X <strong id="accel-x-sd">—</strong> g | Y <strong id="accel-y-sd">—</strong> g | Z <strong id="accel-z-sd">—</strong> g</p>
+        <p>Combined movement variability: <strong id="accel-combined">—</strong> g</p>
+        <p>Largest read gap: <strong id="accel-gap">—</strong> seconds</p>
+        <ul id="accel-warnings"></ul>
+        <p id="accel-save-status">Recording files will appear after capture.</p>
+        <ul id="accel-downloads"></ul>
+        <p>Variability describes changes in acceleration around each axis's mean. Sensor calibration remains unverified.</p>
     </section>
 
     <section class="wide">
