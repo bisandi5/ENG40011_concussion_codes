@@ -1,4 +1,4 @@
-"""One HRV session at a time. No camera, scoring or simulated hardware."""
+"""One HRV session at a time. Experimental signal-quality coverage scoring; no simulated hardware."""
 import csv
 import json
 from pathlib import Path
@@ -17,7 +17,7 @@ class HRVService:
         self.thread = None
         self.files = {}
         self.state = dict(running=False, stage='idle', run_id=None, error=None,
-                          result=None, downloads={}, duration_seconds=60, settling_seconds=10,
+                          result=None, downloads={}, duration_seconds=20, settling_seconds=10,
                           captured_samples=0, recorded_samples=0, latest_red=None, latest_ir=None,
                           elapsed_seconds=0, phase_elapsed_seconds=0, sample_elapsed_seconds=0)
         self.started = None
@@ -78,7 +78,7 @@ class HRVService:
             hrv = self.module_loader()
             self.output_dir.mkdir(parents=True, exist_ok=True)
             prefix = self.output_dir / f'prv_web_{run_id}'
-            rows, measured, metadata = hrv.record(duration=60, settling=10,
+            rows, measured, metadata = hrv.record(duration=self.state['duration_seconds'], settling=self.state['settling_seconds'],
                 stop_event=self.stop_event, progress=self._progress)
             raw_file = prefix.with_suffix('.csv')
             with raw_file.open('w', newline='') as file:
@@ -93,7 +93,8 @@ class HRVService:
                 result = dict(status='cancelled' if self.stop_event.is_set() else 'recording_failed',
                               pulse_rate_bpm=None, rmssd_ms=None, selected_seconds=0,
                               reasons=['Cancelled by user.'] if self.stop_event.is_set() else [failed],
-                              acquisition=metadata, score=None)
+                              acquisition=metadata, score=None, signal_quality_score=None,
+                              score_type='signal_quality_coverage')
             else:
                 self._progress(dict(stage='analysing'))
                 # The existing analyser accepts array-like inputs; it converts them itself.
@@ -122,11 +123,13 @@ class HRVService:
             with self.lock:
                 if self.stop_event.is_set():
                     result.update(status='cancelled', pulse_rate_bpm=None, rmssd_ms=None, selected_seconds=0,
-                                  reasons=['Cancelled by user.'])
+                                  reasons=['Cancelled by user.'], signal_quality_score=None, score=None,
+                                  bpm_selected_seconds=0, bpm_interval_count=0)
                     # Remove analysis artifacts for a cancelled session; raw data remains available.
                     for kind in ('graph', 'intervals'):
                         files.pop(kind, None)
-                result['score'] = None
+                # Generic score alias always means signal quality, never concussion risk.
+                result['score'] = result.get('signal_quality_score')
                 json_file = prefix.with_suffix('.json')
                 json_file.write_text(json.dumps(result, indent=2, allow_nan=False))
                 files['result'] = json_file
