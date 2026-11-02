@@ -1,5 +1,5 @@
 """20-second accelerometer capture, preserving the project's original conversion.
-No balance diagnosis or assessment score is calculated.
+Reports experimental movement categories from team-selected thresholds.
 """
 import csv
 import json
@@ -11,6 +11,53 @@ from pathlib import Path
 ADDRESS = 0x1C
 DURATION_SECONDS = 20
 READ_INTERVAL = 0.02  # Host read target 50 Hz; sensor configured for 100 Hz.
+LOW_MOVEMENT_LIMIT_G = 0.95
+HIGH_MOVEMENT_LIMIT_G = 1.50
+
+
+def classify_movement(value):
+    """Team-selected movement bands; no diagnostic probability is implied."""
+    if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value) or value < 0:
+        raise ValueError('Combined movement variability must be finite and nonnegative.')
+    if value < LOW_MOVEMENT_LIMIT_G:
+        return 'low'
+    if value <= HIGH_MOVEMENT_LIMIT_G:
+        return 'medium'
+    return 'high'
+
+
+def add_movement_category(result):
+    """Withhold categories for incomplete or unreliable captures; preserve raw values."""
+    result.update(movement_level=None, movement_label=None,
+                  movement_classification_status='unavailable',
+                  movement_note='No completed movement result.',
+                  movement_thresholds_g=dict(low_below=LOW_MOVEMENT_LIMIT_G,
+                      medium_from=LOW_MOVEMENT_LIMIT_G, medium_through=HIGH_MOVEMENT_LIMIT_G,
+                      high_above=HIGH_MOVEMENT_LIMIT_G),
+                  movement_rule='Team-selected prototype thresholds; movement category, not concussion risk or percentage confidence.')
+    if result.get('status') != 'complete':
+        return result
+    value = result.get('combined_variability_g')
+    try:
+        level = classify_movement(value)
+    except ValueError:
+        result['movement_note'] = 'Combined variability is missing or invalid.'
+        return result
+    issues = []
+    if result.get('possible_clipping'):
+        issues.append('Possible sensor clipping.')
+    if result.get('uneven_read_timing'):
+        issues.append('Read timing was uneven.')
+    if result.get('short_recording'):
+        issues.append('Recorded span was too short.')
+    if issues:
+        result.update(movement_classification_status='unreliable',
+                      movement_note='Category withheld: ' + ' '.join(issues))
+        return result
+    result.update(movement_level=level, movement_label=level.capitalize() + ' movement',
+                  movement_classification_status='available',
+                  movement_note='Based on the team-selected 0.95 g and 1.50 g thresholds; experimental movement category.')
+    return result
 
 
 def convert_to_g(msb, lsb):
@@ -138,6 +185,7 @@ def record_balance(duration=DURATION_SECONDS, stop_event=None, progress=None,
                   largest_sample_gap_seconds=max(gaps) if gaps else None,
                   x_sd_g=None, y_sd_g=None, z_sd_g=None, combined_variability_g=None,
                   assessment_score=None, file=str(output_file),
+                  possible_clipping=False, uneven_read_timing=False, short_recording=False,
                   device_address='0x1C', sensor_configured_rate_hz=100,
                   host_target_read_rate_hz=50, warnings=[],
                   conversion='Original signed 12-bit +/-2g conversion, 1024 counts/g; calibration unverified')
@@ -145,12 +193,16 @@ def record_balance(duration=DURATION_SECONDS, stop_event=None, progress=None,
         x_sd, y_sd, z_sd = (standard_deviation([s[i] for s in samples]) for i in (1, 2, 3))
         result.update(x_sd_g=x_sd, y_sd_g=y_sd, z_sd_g=z_sd,
                       combined_variability_g=math.sqrt(x_sd ** 2 + y_sd ** 2 + z_sd ** 2))
-        if rate < 40 or (gaps and max(gaps) > 0.1):
+        result['uneven_read_timing'] = bool(rate < 40 or (gaps and max(gaps) > 0.1))
+        result['short_recording'] = span < duration - 0.1
+        result['possible_clipping'] = any(abs(v) >= 1.99 for s in samples for v in s[1:])
+        if result['uneven_read_timing']:
             result['warnings'].append('Read timing was uneven. Inspect timestamps before comparing trials.')
-        if span < duration - 0.1:
+        if result['short_recording']:
             result['warnings'].append('Recorded span is shorter than requested.')
-        if any(abs(v) >= 1.99 for s in samples for v in s[1:]):
+        if result['possible_clipping']:
             result['warnings'].append('Some readings are close to the configured range limit; clipping is possible.')
+    add_movement_category(result)
     json_file = output_file.with_suffix('.json')
     result['result_file'] = str(json_file)
     json_file.write_text(json.dumps(result, indent=2, allow_nan=False))
@@ -167,12 +219,16 @@ if __name__ == '__main__':
             print(f"Largest sample gap: {result['largest_sample_gap_seconds']:.3f} seconds")
             for axis in ('x', 'y', 'z'):
                 print(f"{axis.upper()} variability: {result[axis + '_sd_g']:.5f} g")
-            print(f"Combined variability: {result['combined_variability_g']:.5f} g")
+            print(f"Combined movement variability: {result['combined_variability_g']:.5f} g")
+            print('Movement level:', result['movement_label'] or 'Unavailable')
+            print(result['movement_note'])
+            for warning in result['warnings']:
+                print('Warning:', warning)
         elif result['error']:
             print('Error:', result['error'])
         print('Raw data:', result['file'])
         print('Details:', result['result_file'])
-        print('Assessment score: not calculated.')
+        print('Movement categories are experimental; no percentage confidence or concussion score is calculated.')
     except Exception as exc:
         print('Recording failed:', exc)
         raise SystemExit(1)

@@ -190,6 +190,8 @@ function renderAccelerometer(s) {
     for (const [id, key] of Object.entries({'accel-x-sd':'x_sd_g','accel-y-sd':'y_sd_g','accel-z-sd':'z_sd_g','accel-combined':'combined_variability_g'})) {
         byId(id).textContent = complete ? format(r[key], 5) : '—';
     }
+    byId('accel-movement-level').textContent = complete ? (r.movement_classification_status === 'available' ? r.movement_label : 'Unavailable') : '—';
+    byId('accel-movement-note').textContent = complete ? (r.movement_note || 'Movement category unavailable. Check that the updated accelerometer backend is installed.') : 'Experimental movement categories based on team testing; no concussion probability is calculated.';
     byId('accel-rate').textContent = r ? format(r.average_read_rate_hz) : '—';
     byId('accel-gap').textContent = r ? format(r.largest_sample_gap_seconds, 3) : '—';
     byId('accel-result-message').textContent = complete ? 'Movement variability calculated from this recording.' :

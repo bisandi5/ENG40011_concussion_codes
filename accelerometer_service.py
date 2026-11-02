@@ -68,7 +68,10 @@ class AccelerometerService:
             with self.lock:
                 if self.stop_event.is_set():
                     result.update(status='cancelled', x_sd_g=None, y_sd_g=None, z_sd_g=None,
-                                  combined_variability_g=None, assessment_score=None)
+                                  combined_variability_g=None, assessment_score=None,
+                                  movement_level=None, movement_label=None,
+                                  movement_classification_status='unavailable',
+                                  movement_note='Cancelled: no completed movement result.')
                     Path(result['result_file']).write_text(json.dumps(result, indent=2, allow_nan=False))
                 files = {}
                 for kind, key in [('raw', 'file'), ('result', 'result_file')]:
