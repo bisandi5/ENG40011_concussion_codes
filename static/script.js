@@ -86,6 +86,7 @@ function renderHRV(s) {
     const usable = r && r.status === 'prototype_segment_estimate';
     const bpmUsable = usable || r?.status === 'prototype_pulse_rate_only';
     const finished = !s.running && s.stage === 'complete';
+    byId('peak-hr-derivative').textContent =usable && r.peak_hr_derivative != null ? format(r.peak_hr_derivative, 2) : '—';
     byId('pulse-rate').textContent = finished && bpmUsable ? format(r.pulse_rate_bpm) : '—';
     byId('rmssd').textContent = finished && usable ? format(r.rmssd_ms, 2) : '—';
     const quality = r?.signal_quality_score;
