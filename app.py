@@ -1,4 +1,7 @@
 from pathlib import Path
+from functools import wraps
+from datetime import datetime, timezone
+from assessment import calculate_assessment
 import atexit
 import json
 import uuid
@@ -21,6 +24,63 @@ latest_frame = None
 session_id = None
 state = {'running': False, 'stage': 'Waiting', 'error': None, 'elapsed': 0, 'score': None}
 started = 0
+assessment_lock = threading.RLock()
+assessment_id = uuid.uuid4().hex
+assessment_started = datetime.now(timezone.utc).isoformat()
+assessment_baseline = {'hrv': None, 'accelerometer': None, 'camera': None}
+
+
+def assessment_guard(fn):
+    @wraps(fn)
+    def guarded(*args, **kwargs):
+        with assessment_lock:
+            return fn(*args, **kwargs)
+    return guarded
+
+
+def assessment_snapshot():
+    with assessment_lock:
+        hrv = hrv_service.snapshot()
+        accel = accelerometer_service.snapshot()
+        with lock:
+            camera = dict(state)
+        result = calculate_assessment(hrv, accel, camera, assessment_baseline)
+        result.update(assessment_id=assessment_id, started_at=assessment_started,
+                      any_running=bool(hrv['running'] or accel['running'] or camera['running']))
+        return result
+
+
+@app.get('/api/assessment/status')
+def combined_status():
+    return jsonify(assessment_snapshot())
+
+
+@app.post('/api/assessment/new')
+@assessment_guard
+def new_assessment():
+    global assessment_id, assessment_started, assessment_baseline
+    hrv = hrv_service.snapshot()
+    accel = accelerometer_service.snapshot()
+    with lock:
+        camera = dict(state)
+        if hrv['running'] or accel['running'] or camera['running']:
+            return jsonify(error='Stop or finish all tests before starting a new assessment.'), 409
+        assessment_baseline = {'hrv': hrv.get('run_id'), 'accelerometer': accel.get('run_id'),
+                               'camera': camera.get('session_id')}
+        assessment_id = uuid.uuid4().hex
+        assessment_started = datetime.now(timezone.utc).isoformat()
+    return jsonify(assessment_snapshot())
+
+
+@app.get('/api/assessment/result')
+def combined_result():
+    result = assessment_snapshot()
+    if result['status'] != 'complete':
+        return jsonify(error='All three usable tests are required.', reasons=result['reasons']), 409
+    return Response(json.dumps(result, indent=2, allow_nan=False), mimetype='application/json',
+                    headers={'Content-Disposition': f'attachment; filename="assessment_{result["assessment_id"]}.json"',
+                             'Cache-Control': 'no-store'})
+
 
 def publish(frame, metrics):
     import cv2
@@ -61,6 +121,7 @@ def status():
         return jsonify(dict(state))
 
 @app.post('/api/start')
+@assessment_guard
 def start():
     global worker, latest_frame, started, session_id
     with lock:
@@ -92,6 +153,7 @@ def next_stage():
     return jsonify(ok=True)
 
 @app.post('/api/stop')
+@assessment_guard
 def stop():
     with lock:
         if state['running']:
@@ -140,12 +202,14 @@ def hrv_status():
     return jsonify(hrv_service.snapshot())
 
 @app.post('/api/hrv/start')
+@assessment_guard
 def hrv_start():
     if not hrv_service.start():
         return jsonify(error='HRV recording is already running or stopping.'), 409
     return jsonify(ok=True), 202
 
 @app.post('/api/hrv/stop')
+@assessment_guard
 def hrv_stop():
     hrv_service.stop()
     return jsonify(ok=True), 202
@@ -162,12 +226,14 @@ def accelerometer_status():
     return jsonify(accelerometer_service.snapshot())
 
 @app.post('/api/accelerometer/start')
+@assessment_guard
 def accelerometer_start():
     if not accelerometer_service.start():
         return jsonify(error='Accelerometer is already running or stopping.'), 409
     return jsonify(ok=True), 202
 
 @app.post('/api/accelerometer/stop')
+@assessment_guard
 def accelerometer_stop():
     accelerometer_service.stop()
     return jsonify(ok=True), 202

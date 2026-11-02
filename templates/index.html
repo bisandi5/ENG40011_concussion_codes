@@ -11,6 +11,35 @@
     <h1>Headband Dashboard</h1>
     <p>Record pulse, movement and eye-tracking tests from sensors connected to the Raspberry Pi.</p>
 
+    <section class="wide final-assessment" aria-labelledby="final-title">
+        <h2 id="final-title">Final confidence score</h2>
+        <p>Experimental project index. Complete all three tests for the same person. Higher scores indicate more elevated inputs under the project rules.</p>
+        <p class="final-score"><strong id="final-score" aria-live="polite">Unavailable</strong> <span>/ 100</span></p>
+        <p id="final-status">Waiting for completed sensor tests.</p>
+        <div class="score-table-wrap">
+            <table class="score-table">
+                <thead><tr><th>Component</th><th>Result</th><th>Score / 100</th><th>Weight</th><th>Contribution</th></tr></thead>
+                <tbody>
+                    <tr><th>Accelerometer</th><td id="final-accelerometer-result">—</td><td id="final-accelerometer-score">—</td><td>20%</td><td id="final-accelerometer-contribution">—</td></tr>
+                    <tr><th>HR derivative</th><td id="final-hrv-result">—</td><td id="final-hrv-score">—</td><td>15%</td><td id="final-hrv-contribution">—</td></tr>
+                    <tr><th>Eye camera</th><td id="final-camera-result">—</td><td id="final-camera-score">—</td><td>65%</td><td id="final-camera-contribution">—</td></tr>
+                </tbody>
+            </table>
+        </div>
+        <p>Final = 0.20 × movement score + 0.15 × HR derivative score + 0.65 × camera score.</p>
+        <details><summary>Scoring rules</summary>
+            <p>Movement: below 0.95 g → 0; 0.95–1.50 g → 50; above 1.50 g → 100.</p>
+            <p>HR derivative: 25 BPM/s or below → 0 (Stable); above 25 BPM/s → 100 (Elevated).</p>
+            <p>Camera: use the model percentage directly. These are project-defined mappings and weights. The final index is not a validated concussion probability. HRV signal quality is reported separately and is not added to the index.</p>
+        </details>
+        <ul id="final-reasons"></ul>
+        <button id="assessment-new" type="button" disabled>New assessment / next person</button>
+        <a id="assessment-download" href="/api/assessment/result" download hidden>Download combined result (JSON)</a>
+        <p>Choose New assessment before testing another person. Old sensor results are excluded from the next combined score; repeat all three tests. Download before starting again. Results are held until the app restarts.</p>
+        <p id="assessment-id"></p>
+        <p id="assessment-error" class="error" role="alert"></p>
+    </section>
+
     <section aria-labelledby="recording-title">
         <h2 id="recording-title">Heart-rate recording</h2>
         <p>Support your hand and rest your finger gently on the sensor. Keep it in place until capture finishes.</p>
@@ -38,7 +67,7 @@
     <section>
         <h2>HRV / pulse variability result</h2>
         <p id="hrv-result-message" aria-live="polite">No test completed yet.</p>
-        <p>Peak HR derivative: <strong id="peak-hr-derivative">—</strong>BPM squared</p>
+        <p>Peak HR derivative: <strong id="peak-hr-derivative">—</strong> BPM/s</p>
         <p>Status of HR derivative: <strong id="Status-hr-derivative">—</strong></p>
         <p>Pulse-rate estimate: <strong id="pulse-rate">—</strong> BPM</p>
         <p>PRV RMSSD estimate: <strong id="rmssd">—</strong> ms</p>

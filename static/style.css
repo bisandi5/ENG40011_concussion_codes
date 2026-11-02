@@ -167,3 +167,14 @@ a { color: #10536a; }
 .axis-values strong { font-size: 24px; color: #18334e; }
 #accel-warnings li, #accel-downloads li { margin: 9px 0; line-height: 1.5; }
 #accel-stop:not(:disabled) { background: #b42336; }
+
+.final-assessment { border-top: 5px solid #176b87; }
+.final-score { margin: 10px 0; }
+.final-score strong { font-size: clamp(28px, 5vw, 44px); color: #18334e; }
+.score-table-wrap { overflow-x: auto; }
+.score-table { width: 100%; border-collapse: collapse; text-align: left; }
+.score-table th, .score-table td { padding: 12px 10px; border-bottom: 1px solid #dce5ee; }
+.score-table thead { background: #eef3f8; }
+#assessment-id { font-size: 13px; overflow-wrap: anywhere; }
+#assessment-download { display: inline-block; margin: 12px 0; }
+#assessment-download[hidden] { display: none; }

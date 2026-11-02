@@ -87,8 +87,12 @@ function renderHRV(s) {
     const usable = r && r.status === 'prototype_segment_estimate';
     const bpmUsable = usable || r?.status === 'prototype_pulse_rate_only';
     const finished = !s.running && s.stage === 'complete';
-    byId('peak-hr-derivative').textContent =usable && r.peak_hr_derivative != null ? format(r.peak_hr_derivative, 2) : '—';
-    byId('Status-hr-derivative').textContent =usable && r.class_deriv ? r.class_deriv : '—';
+    const derivative = r?.peak_hr_derivative;
+    const derivativeReady = finished && usable && typeof derivative === 'number' && Number.isFinite(derivative) && derivative >= 0;
+    const derivativeField = byId('peak-hr-derivative');
+    const derivativeStatus = byId('Status-hr-derivative');
+    if (derivativeField) derivativeField.textContent = derivativeReady ? format(derivative, 2) : '—';
+    if (derivativeStatus) derivativeStatus.textContent = derivativeReady ? (derivative > 25 ? 'Elevated' : 'Stable') : '—';
     byId('pulse-rate').textContent = finished && bpmUsable ? format(r.pulse_rate_bpm) : '—';
     byId('rmssd').textContent = finished && usable ? format(r.rmssd_ms, 2) : '—';
     const quality = r?.signal_quality_score;
@@ -123,14 +127,26 @@ function renderHRV(s) {
     hrvButtons();
 }
 async function pollHRV() {
+    let snapshot;
     try {
         const response = await fetch('/api/hrv/status', {cache:'no-store'});
-        if (!response.ok) throw new Error('HRV status request failed');
-        renderHRV(await response.json());
+        if (!response.ok) throw new Error('HTTP ' + response.status);
+        snapshot = await response.json();
     } catch (error) {
         hrvState = null; hrvButtons();
-        byId('hrv-error').textContent = 'Cannot reach HRV controls. Check the Pi connection and Flask terminal.';
+        byId('hrv-error').textContent = 'Cannot load HRV status: ' + error.message + '. Check the Pi connection and Flask terminal.';
         badge('heart-status', 'Connection unavailable', 'disconnected');
+        return;
+    }
+    try {
+        renderHRV(snapshot);
+    } catch (error) {
+        console.error('HRV dashboard render failed:', error);
+        // The endpoint replied. Keep recording controls available even when
+        // a result-display element is missing from an older HTML template.
+        hrvState = snapshot;
+        hrvButtons();
+        byId('hrv-error').textContent = 'HRV status received, but the dashboard could not display it: ' + error.message + '. Refresh with Ctrl+F5 and check index.html matches script.js.';
     }
 }
 const cameraInstructions = {
@@ -247,8 +263,74 @@ async function pollAccelerometer() {
         badge('accelerometer-status', 'Connection unavailable', 'disconnected');
     }
 }
+let assessmentState = null;
+let assessmentBusy = false;
+let assessmentEpoch = 0;
+function renderAssessment(s) {
+    assessmentState = s;
+    const ready = s.status === 'complete' && typeof s.final_score === 'number' && Number.isFinite(s.final_score);
+    byId('final-score').textContent = ready ? format(s.final_score, 2) : 'Unavailable';
+    byId('final-status').textContent = ready ? 'All three usable tests completed. Experimental project index.' : 'Complete all three usable tests for this assessment.';
+    for (const name of ['accelerometer', 'hrv', 'camera']) {
+        const part = s.components?.[name];
+        const available = part && typeof part.score === 'number' && Number.isFinite(part.score);
+        byId('final-' + name + '-score').textContent = available ? format(part.score, 1) : '—';
+        byId('final-' + name + '-contribution').textContent = available ? format(part.contribution, 2) : '—';
+        byId('final-' + name + '-result').textContent = available ?
+            (name === 'camera' ? format(part.raw_value, 1) + '%' : part.category + ' (' + format(part.raw_value, name === 'accelerometer' ? 5 : 2) + ' ' + part.unit + ')') : 'Awaiting usable test';
+    }
+    byId('final-reasons').replaceChildren();
+    for (const reason of s.reasons || []) {
+        const li = document.createElement('li'); li.textContent = reason; byId('final-reasons').append(li);
+    }
+    byId('assessment-new').disabled = assessmentBusy || s.any_running;
+    byId('assessment-download').hidden = !ready;
+    byId('assessment-id').textContent = 'Assessment: ' + s.assessment_id;
+    byId('assessment-error').textContent = '';
+}
+function clearAssessment(message) {
+    assessmentState = null;
+    byId('final-score').textContent = 'Unavailable';
+    byId('final-status').textContent = message;
+    byId('assessment-download').hidden = true;
+    byId('assessment-new').disabled = true;
+    for (const name of ['accelerometer', 'hrv', 'camera']) {
+        for (const field of ['result', 'score', 'contribution']) byId('final-' + name + '-' + field).textContent = '—';
+    }
+}
+async function pollAssessment() {
+    const epoch = assessmentEpoch;
+    try {
+        const response = await fetch('/api/assessment/status', {cache:'no-store'});
+        if (!response.ok) throw new Error('HTTP ' + response.status);
+        const data = await response.json();
+        if (epoch === assessmentEpoch) renderAssessment(data);
+    } catch (error) {
+        if (epoch !== assessmentEpoch) return;
+        clearAssessment('Combined result unavailable.');
+        byId('assessment-error').textContent = 'Cannot load combined result: ' + error.message;
+    }
+}
+byId('assessment-new').onclick = async () => {
+    if (assessmentBusy) return;
+    assessmentBusy = true;
+    assessmentEpoch += 1;
+    clearAssessment('Starting a new assessment…');
+    try {
+        const response = await fetch('/api/assessment/new', {method:'POST'});
+        const data = await response.json();
+        if (!response.ok) throw new Error(data.error || 'Cannot start a new assessment.');
+        assessmentBusy = false;
+        renderAssessment(data);
+    } catch (error) {
+        byId('assessment-error').textContent = error.message;
+    } finally {
+        assessmentBusy = false;
+        if (assessmentState) byId('assessment-new').disabled = assessmentState.any_running;
+    }
+};
 async function poll() {
-    await Promise.allSettled([pollHRV(), pollCamera(), pollAccelerometer()]);
+    await Promise.allSettled([pollHRV(), pollCamera(), pollAccelerometer(), pollAssessment()]);
     setTimeout(poll, 500);
 }
 poll();
