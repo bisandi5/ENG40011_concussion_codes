@@ -688,6 +688,7 @@ def run_integrated_oculomotor_suite(stop_event, commands, publish):
         score_note = "Complete both eye tests to obtain a model output."
         pupil_age = None
         last_pupil_time = None
+        summary_rendered = False
         pursuit_frames = 0
         pursuit_valid_frames = 0
 
@@ -823,6 +824,7 @@ def run_integrated_oculomotor_suite(stop_event, commands, publish):
                     state = 'SUMMARY'
 
             elif state == 'SUMMARY':
+                summary_rendered = True
                 overlay = frame.copy()
                 cv2.rectangle(overlay, (30, 30), (img_w - 30, img_h - 30), (15, 15, 15), -1)
                 cv2.addWeighted(overlay, 0.85, frame, 0.15, 0, frame)
@@ -849,7 +851,7 @@ def run_integrated_oculomotor_suite(stop_event, commands, publish):
                             (70, 330), cv2.FONT_HERSHEY_SIMPLEX, 0.55, (200, 200, 200), 1)
 
                 score_text = f"{concussion_confidence:.1f}%" if concussion_confidence is not None else "Unavailable"
-                cv2.putText(frame, f"EXPERIMENTAL MODEL OUTPUT: {score_text}", (40, 390),
+                cv2.putText(frame, f"CAMERA CONFIDENCE SCORE: {score_text}", (40, 390),
                             cv2.FONT_HERSHEY_SIMPLEX, 0.65, (220, 220, 220), 2)
                 cv2.putText(frame, "Results and controls are in the browser below the preview.",
                             (40, 430), cv2.FONT_HERSHEY_SIMPLEX, 0.48, (220, 220, 220), 1)
@@ -880,6 +882,10 @@ def run_integrated_oculomotor_suite(stop_event, commands, publish):
             }
             # Frame arrays are RGB internally. JPEG encoding expects BGR.
             publish(cv2.cvtColor(frame, cv2.COLOR_RGB2BGR), metrics)
+            if summary_rendered:
+                # Finish acquisition after publishing the summary. Flask retains
+                # SUMMARY and its score; the waiting-stage timeout cannot erase it.
+                break
             try:
                 command = commands.get_nowait()
             except queue.Empty:
