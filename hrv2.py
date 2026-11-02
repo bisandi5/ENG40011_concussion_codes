@@ -141,6 +141,28 @@ MIN_BPM_INTERVALS = 4
 MIN_INPUT_SECONDS = 20.0
 SECTION_SECONDS = 10
 
+def peak_heart_rate_derivative(intervals_ms):
+    """
+    Maximum heart-rate derivative (BPM/s) computed
+    from consecutive pulse intervals.
+    """
+
+    if len(intervals_ms) < 2:
+        return None
+
+    hr = 60000.0 / np.asarray(intervals_ms)
+
+    dhr_dt = []
+
+    for i in range(len(hr) - 1):
+        dt = intervals_ms[i] / 1000.0
+
+        if dt > 0:
+            dhr_dt.append(
+                abs((hr[i + 1] - hr[i]) / dt)
+            )
+
+    return max(dhr_dt) if dhr_dt else None
 
 def robust_scale(x):
     return float(1.4826 * np.median(np.abs(x - np.median(x))))
@@ -186,7 +208,7 @@ def analyse(red, ir):
     red, ir = np.asarray(red, dtype=float), np.asarray(ir, dtype=float)
     result = dict(version=VERSION, status='insufficient_signal_quality',
                   measurement='Fingertip PPG pulse-rate variability (PRV)',
-                  pulse_rate_bpm=None, rmssd_ms=None, score=None,
+                  peak_hr_derivative=None,pulse_rate_bpm=None, rmssd_ms=None, score=None,
                   signal_quality_score=None, score_type='signal_quality_coverage',
                   score_label='Signal quality (experimental)',
                   score_definition='100 times accepted interval seconds divided by assessable seconds; excludes 2s at each filter edge. Not accuracy or concussion probability.',
@@ -319,7 +341,15 @@ def analyse(red, ir):
         if seconds >= MIN_RUN_SECONDS and len(chosen) >= MIN_INTERVALS:
             for item in chosen:
                 item['selected'] = True
-            result.update(calculate_variability([i['interval_ms'] for i in chosen]))
+            
+            selected_intervals = [
+                i['interval_ms']
+                for i in chosen
+            ]
+            result.update(calculate_variability(selected_intervals))
+            result['peak_hr_derivative'] = (
+                peak_heart_rate_derivative(selected_intervals)
+            )
             result.update(status='prototype_segment_estimate', selected_seconds=round(seconds, 2),
                           selected_start_s=chosen[0]['start_s'], selected_end_s=chosen[-1]['end_s'])
             diagnostics.update(selected_start=chosen[0]['start_s'], selected_end=chosen[-1]['end_s'])
