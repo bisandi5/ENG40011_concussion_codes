@@ -96,7 +96,11 @@
         <button id="camera-stop" type="button" disabled>Stop camera</button>
         <p id="camera-command-error" class="error" role="alert"></p>
         <p id="camera-error" class="error" role="alert"></p>
-        <img id="camera-preview" alt="Live preview from the Pi camera" style="max-width:100%;height:auto" hidden>
+        <img
+        id="camera-preview"
+        alt="Live preview from the Pi camera"
+        style="display:block;width:auto;height:auto;max-width:100%;max-height:65vh;object-fit:contain;margin:1rem auto"
+        hidden>
         <p>Pupil estimate: <strong id="camera-pupil">—</strong> mm | Blink rate: <strong id="camera-blink">—</strong> blinks/min</p>
         <p>Face tracking: <strong id="camera-tracking">—</strong> | Elapsed: <strong id="camera-elapsed">0</strong> seconds</p>
         <p>Fixation: <strong id="camera-fixation">—</strong> | RMS jitter: <strong id="camera-jitter">—</strong> estimated degrees</p>
