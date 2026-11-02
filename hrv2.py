@@ -140,7 +140,9 @@ MIN_BPM_SECONDS = 5.0
 MIN_BPM_INTERVALS = 4
 MIN_INPUT_SECONDS = 20.0
 SECTION_SECONDS = 10
-
+# Heart Accelration Thresholds
+LOW_HEART_ACCEL = 5
+HIGH_HEART_ACCEL = 20
 def peak_heart_rate_derivative(intervals_ms):
     """
     Maximum heart-rate derivative (BPM/s) computed
@@ -163,6 +165,17 @@ def peak_heart_rate_derivative(intervals_ms):
             )
 
     return max(dhr_dt) if dhr_dt else None
+
+def classify_derivative(Peak_heart):
+    
+    if Peak_heart is None:
+        return "None"
+    elif Peak_heart<=25:
+            return "Stable"
+    elif Peak_heart >25:
+        return "Large Elevations"
+
+
 
 def robust_scale(x):
     return float(1.4826 * np.median(np.abs(x - np.median(x))))
@@ -208,7 +221,7 @@ def analyse(red, ir):
     red, ir = np.asarray(red, dtype=float), np.asarray(ir, dtype=float)
     result = dict(version=VERSION, status='insufficient_signal_quality',
                   measurement='Fingertip PPG pulse-rate variability (PRV)',
-                  peak_hr_derivative=None,pulse_rate_bpm=None, rmssd_ms=None, score=None,
+                  class_deriv=None,peak_hr_derivative=None,pulse_rate_bpm=None, rmssd_ms=None, score=None,
                   signal_quality_score=None, score_type='signal_quality_coverage',
                   score_label='Signal quality (experimental)',
                   score_definition='100 times accepted interval seconds divided by assessable seconds; excludes 2s at each filter edge. Not accuracy or concussion probability.',
@@ -350,6 +363,7 @@ def analyse(red, ir):
             result['peak_hr_derivative'] = (
                 peak_heart_rate_derivative(selected_intervals)
             )
+            result['class_deriv']=(classify_derivative(result['peak_hr_derivative']))
             result.update(status='prototype_segment_estimate', selected_seconds=round(seconds, 2),
                           selected_start_s=chosen[0]['start_s'], selected_end_s=chosen[-1]['end_s'])
             diagnostics.update(selected_start=chosen[0]['start_s'], selected_end=chosen[-1]['end_s'])
