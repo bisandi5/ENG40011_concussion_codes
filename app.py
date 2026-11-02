@@ -1,4 +1,7 @@
 from pathlib import Path
+import atexit
+import json
+import uuid
 import queue
 import threading
 import time
@@ -15,6 +18,7 @@ stop_event = threading.Event()
 commands = queue.Queue(maxsize=1)
 worker = None
 latest_frame = None
+session_id = None
 state = {'running': False, 'stage': 'Waiting', 'error': None, 'elapsed': 0, 'score': None}
 started = 0
 
@@ -25,6 +29,8 @@ def publish(frame, metrics):
     with lock:
         if ok:
             latest_frame = encoded.tobytes()
+        if stop_event.is_set():
+            metrics = dict(metrics, score=None, stage='Stopping', can_continue=False)
         state.update(metrics)
         state['elapsed'] = round(time.monotonic() - started, 1)
 
@@ -34,12 +40,16 @@ def run_camera():
         run_integrated_oculomotor_suite(stop_event, commands, publish)
     except Exception as exc:
         with lock:
-            state.update(stage='Error', error=str(exc))
+            state.update(stage='Error', error=str(exc), score=None, can_continue=False)
     finally:
         with lock:
             state['running'] = False
             if state['stage'] != 'Error':
-                state['stage'] = 'Stopped'
+                if stop_event.is_set() and state['stage'] != 'SUMMARY':
+                    state.update(stage='Stopped', score=None)
+                elif state['stage'] != 'SUMMARY':
+                    state['stage'] = 'Stopped'
+            state['can_continue'] = False
 
 @app.get('/')
 def home():
@@ -52,17 +62,18 @@ def status():
 
 @app.post('/api/start')
 def start():
-    global worker, latest_frame, started
+    global worker, latest_frame, started, session_id
     with lock:
         if worker is not None and worker.is_alive():
             return jsonify(error='Camera is already running or stopping'), 409
         while not commands.empty():
             commands.get_nowait()
         stop_event.clear()
+        session_id = uuid.uuid4().hex
         latest_frame = None
         started = time.monotonic()
         state.clear()
-        state.update(running=True, stage='Starting', error=None, elapsed=0, score=None)
+        state.update(running=True, stage='Starting', error=None, elapsed=0, score=None, session_id=session_id, can_continue=False)
         worker = threading.Thread(target=run_camera, daemon=True)
         worker.start()
     return jsonify(ok=True)
@@ -72,22 +83,29 @@ def next_stage():
     with lock:
         if not state['running'] or state['stage'] not in ('PUPIL_BLINK', 'READY_JITTER', 'READY_PURSUIT'):
             return jsonify(error='Wait for a ready stage'), 409
-        if state['stage'] == 'PUPIL_BLINK' and state.get('pupil_mm') is None:
-            return jsonify(error='Wait for a pupil measurement before continuing'), 409
+        if not state.get('can_continue'):
+            return jsonify(error='Wait for a current pupil measurement with your eyes visible'), 409
         try:
-            commands.put_nowait('next')
+            commands.put_nowait(('next', state['stage']))
         except queue.Full:
             pass
     return jsonify(ok=True)
 
 @app.post('/api/stop')
 def stop():
-    stop_event.set()
+    with lock:
+        if state['running']:
+            stop_event.set()
+            state.update(stage='Stopping', score=None, can_continue=False)
     return jsonify(ok=True)
 
 def frames():
+    with lock:
+        stream_session = session_id
     while True:
         with lock:
+            if stream_session != session_id:
+                break
             frame = latest_frame
             running = state['running']
         if frame is not None:
@@ -99,6 +117,23 @@ def frames():
 @app.get('/video_feed')
 def video_feed():
     return Response(frames(), mimetype='multipart/x-mixed-replace; boundary=frame', headers={'Cache-Control': 'no-store'})
+
+@app.get('/api/camera/result')
+def camera_result():
+    with lock:
+        if state['stage'] != 'SUMMARY':
+            return jsonify(error='Complete the eye test before downloading a result.'), 409
+        result = dict(state)
+    return Response(json.dumps(result, indent=2, allow_nan=False),
+                    mimetype='application/json',
+                    headers={'Content-Disposition': 'attachment; filename="camera_result.json"',
+                             'Cache-Control': 'no-store'})
+
+@atexit.register
+def shutdown_camera():
+    stop_event.set()
+    if worker is not None and worker.is_alive():
+        worker.join(timeout=3)
 
 @app.get('/api/hrv/status')
 def hrv_status():
