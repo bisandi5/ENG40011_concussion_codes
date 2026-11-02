@@ -59,7 +59,18 @@ function renderHRV(s) {
     hrvState = s;
     byId('recording-status').textContent = stages[s.stage] || s.stage;
     byId('elapsed-time').textContent = format(s.elapsed_seconds);
-    byId('hrv-progress').value = s.captured_samples;
+    // Follow backend timing so labels, counts and progress cannot disagree.
+    const positive = (value, fallback) => typeof value === 'number' && Number.isFinite(value) && value > 0 ? value : fallback;
+    const duration = positive(s.duration_seconds, 20);
+    const settling = typeof s.settling_seconds === 'number' && Number.isFinite(s.settling_seconds) && s.settling_seconds >= 0 ? s.settling_seconds : 10;
+    const sampleRate = positive(s.sample_rate_hz ?? s.result?.acquisition?.nominal_sample_rate_hz, 100);
+    const target = Math.round(duration * sampleRate);
+    const total = Math.round((duration + settling) * sampleRate);
+    byId('hrv-settling-seconds').textContent = format(settling, 0);
+    byId('hrv-recording-seconds').textContent = format(duration, 0);
+    byId('hrv-target-samples').textContent = target;
+    byId('hrv-progress').max = total;
+    byId('hrv-progress').value = s.stage === 'complete' ? total : Math.max(0, Math.min(total, s.captured_samples || 0));
     byId('hrv-instruction').textContent = instructions[s.stage] || '';
     byId('captured-samples').textContent = s.captured_samples;
     byId('recorded-samples').textContent = s.recorded_samples;
@@ -68,17 +79,23 @@ function renderHRV(s) {
     byId('hrv-error').textContent = s.error || '';
     if (s.running) badge('heart-status', s.latest_ir == null ? 'Connecting' : 'Data arriving', s.latest_ir == null ? 'waiting' : 'reading');
     else if (s.stage === 'error') badge('heart-status', 'Capture error', 'disconnected');
-    else if (s.captured_samples > 0) badge('heart-status', 'Capture stopped', 'waiting');
+    else if (s.stage === 'complete') badge('heart-status', 'Capture complete', 'waiting');
+    else if (s.captured_samples > 0) badge('heart-status', s.stage === 'cancelled' ? 'Capture cancelled' : 'Capture stopped', 'waiting');
     else badge('heart-status', 'Not checked', 'disconnected');
     const r = s.result;
     const usable = r && r.status === 'prototype_segment_estimate';
-    byId('pulse-rate').textContent = usable ? format(r.pulse_rate_bpm) : '—';
-    byId('rmssd').textContent = usable ? format(r.rmssd_ms, 2) : '—';
+    const bpmUsable = usable || r?.status === 'prototype_pulse_rate_only';
+    const finished = !s.running && s.stage === 'complete';
+    byId('pulse-rate').textContent = finished && bpmUsable ? format(r.pulse_rate_bpm) : '—';
+    byId('rmssd').textContent = finished && usable ? format(r.rmssd_ms, 2) : '—';
+    const quality = r?.signal_quality_score;
+    byId('hrv-quality-score').textContent = finished && typeof quality === 'number' && Number.isFinite(quality) && quality >= 0 && quality <= 100 ? format(quality) : '—';
     byId('selected-duration').textContent = r ? format(r.selected_seconds, 2) : '—';
     byId('longest-duration').textContent = r ? format(r.longest_usable_run_seconds, 2) : '—';
     let message = s.running ? 'Waiting for this recording’s result.' : 'No test completed yet.';
     if (r) {
         if (usable) message = 'Experimental estimate from the selected continuous section.';
+        else if (r.status === 'prototype_pulse_rate_only') message = 'Pulse-rate estimate available. The usable continuous section did not meet the PRV RMSSD requirements.';
         else if (r.status === 'insufficient_signal_quality') message = 'Data captured. Insufficient signal quality: pulse rate and RMSSD unavailable.';
         else if (r.status === 'cancelled') message = 'Cancelled: no completed measurement.';
         else message = 'Recording failed: no measurement available.';
@@ -87,6 +104,10 @@ function renderHRV(s) {
     byId('hrv-reasons').replaceChildren();
     for (const reason of r?.reasons || []) {
         const li = document.createElement('li'); li.textContent = reason; byId('hrv-reasons').append(li);
+    }
+    byId('hrv-warnings').replaceChildren();
+    for (const warning of r?.warnings || []) {
+        const li = document.createElement('li'); li.textContent = warning; byId('hrv-warnings').append(li);
     }
     byId('hrv-downloads').replaceChildren();
     const labels = {raw:'Raw sensor data (CSV)', result:'Result and capture details (JSON)', intervals:'Detected intervals (CSV)', graph:'Pulse graph (PNG)'};

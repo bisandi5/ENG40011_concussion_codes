@@ -14,10 +14,10 @@
     <section aria-labelledby="recording-title">
         <h2 id="recording-title">Heart-rate recording</h2>
         <p>Support your hand and rest your finger gently on the sensor. Keep it in place until capture finishes.</p>
-        <p>10 seconds settling + 60 seconds recording. Analysis follows automatically.</p>
+        <p><span id="hrv-settling-seconds">10</span> seconds settling + <span id="hrv-recording-seconds">20</span> seconds recording. Analysis follows automatically.</p>
         <p>Status: <strong id="recording-status" aria-live="polite">Waiting</strong></p>
         <p>Elapsed time: <span id="elapsed-time">0</span> seconds</p>
-        <progress id="hrv-progress" max="7000" value="0" aria-label="Pulse capture progress"></progress>
+        <progress id="hrv-progress" max="3000" value="0" aria-label="Pulse capture progress"></progress>
         <p id="hrv-instruction">Start when you are ready.</p>
         <button id="start-button" type="button" disabled>Start HRV test</button>
         <button id="stop-button" type="button" disabled>Cancel HRV test</button>
@@ -29,7 +29,7 @@
         <h2>Heart-rate sensor</h2>
         <span id="heart-status" class="sensor-status disconnected">Not checked</span>
         <p>Samples captured, including settling: <strong id="captured-samples">0</strong></p>
-        <p>Recording samples: <strong id="recorded-samples">0</strong> / 6000</p>
+        <p>Recording samples: <strong id="recorded-samples">0</strong> / <span id="hrv-target-samples">2000</span></p>
         <p>Latest raw infrared: <strong id="raw-ir">—</strong> ADC counts</p>
         <p>Latest raw red: <strong id="raw-red">—</strong> ADC counts</p>
         <p>Raw counts confirm data is arriving; they are not pulse rate.</p>
@@ -40,9 +40,12 @@
         <p id="hrv-result-message" aria-live="polite">No test completed yet.</p>
         <p>Pulse-rate estimate: <strong id="pulse-rate">—</strong> BPM</p>
         <p>PRV RMSSD estimate: <strong id="rmssd">—</strong> ms</p>
-        <p>Selected continuous duration: <strong id="selected-duration">—</strong> seconds</p>
+        <p>Signal quality: <strong id="hrv-quality-score">—</strong> / 100</p>
+        <p id="hrv-quality-description">Usable pulse-interval coverage after excluding filter edges. This score is experimental and does not indicate concussion probability or measurement accuracy.</p>
+        <p>PRV selected continuous duration: <strong id="selected-duration">—</strong> seconds</p>
         <p>Longest usable section: <strong id="longest-duration">—</strong> seconds</p>
         <ul id="hrv-reasons"></ul>
+        <ul id="hrv-warnings"></ul>
         <p>Experimental pulse measurements; accuracy validation remains incomplete.</p>
     </section>
 
