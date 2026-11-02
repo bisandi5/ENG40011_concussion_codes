@@ -688,6 +688,7 @@ def run_integrated_oculomotor_suite(stop_event, commands, publish):
         score_note = "Complete both eye tests to obtain a model output."
         pupil_age = None
         last_pupil_time = None
+        summary_rendered = False
         pursuit_frames = 0
         pursuit_valid_frames = 0
 
@@ -823,6 +824,7 @@ def run_integrated_oculomotor_suite(stop_event, commands, publish):
                     state = 'SUMMARY'
 
             elif state == 'SUMMARY':
+                summary_rendered = True
                 overlay = frame.copy()
                 cv2.rectangle(overlay, (30, 30), (img_w - 30, img_h - 30), (15, 15, 15), -1)
                 cv2.addWeighted(overlay, 0.85, frame, 0.15, 0, frame)
@@ -880,6 +882,10 @@ def run_integrated_oculomotor_suite(stop_event, commands, publish):
             }
             # Frame arrays are RGB internally. JPEG encoding expects BGR.
             publish(cv2.cvtColor(frame, cv2.COLOR_RGB2BGR), metrics)
+            if summary_rendered:
+                # Finish acquisition after publishing the summary. Flask retains
+                # SUMMARY and its score; the waiting-stage timeout cannot erase it.
+                break
             try:
                 command = commands.get_nowait()
             except queue.Empty:
