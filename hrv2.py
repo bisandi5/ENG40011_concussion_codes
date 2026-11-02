@@ -1,5 +1,5 @@
 """Live MAX30102 pulse variability prototype; no simulated readings.
-Version 2: infrared-led detection, section checks and diagnostic graph.
+Version 3: 20-second capture, separate BPM/PRV gates and quality coverage score.
 Engineering checks are provisional. A result is not validated HRV or a diagnosis.
 """
 import argparse
@@ -14,6 +14,8 @@ import numpy as np
 from scipy.signal import butter, sosfiltfilt, find_peaks, welch
 
 FS = 100
+RECORD_SECONDS = 20
+SETTLING_SECONDS = 10
 
 
 def calculate_variability(intervals_ms):
@@ -27,7 +29,9 @@ def calculate_variability(intervals_ms):
                 rmssd_ms=math.sqrt(np.mean(np.diff(intervals_ms) ** 2)))
 
 
-def record(duration=60, settling=10):
+def record(duration=RECORD_SECONDS, settling=SETTLING_SECONDS, stop_event=None, progress=None):
+    if duration < 20 or settling < 0:
+        raise ValueError('Use at least 20 recording seconds and nonnegative settling.')
     import max30102  # Hardware imported only when recording on the Pi.
     sensor = max30102.MAX30102()
     rows = []
@@ -44,12 +48,30 @@ def record(duration=60, settling=10):
         start = time.monotonic()
         last_poll = start
         last_sample = start
-        settling_count = settling * FS
-        target = (duration + settling) * FS
+        settling_count = round(settling * FS)
+        target = round((duration + settling) * FS)
+        last_progress = start - 1
+        def report(now):
+            if progress is None:
+                return
+            recording = len(rows) >= settling_count
+            progress(dict(stage='recording' if recording else 'settling',
+                captured_samples=len(rows), recorded_samples=max(0, len(rows) - settling_count),
+                latest_red=rows[-1][2] if rows else None,
+                latest_ir=rows[-1][3] if rows else None,
+                elapsed_seconds=round(now - start, 1),
+                sample_elapsed_seconds=round(len(rows) / FS, 2),
+                phase_elapsed_seconds=round(max(0, len(rows) - settling_count) / FS if recording else len(rows) / FS, 2)))
         write(0x09, 0x03)
         announced = False
         while len(rows) < target:
             now = time.monotonic()
+            if stop_event is not None and stop_event.is_set():
+                reason = 'Cancelled by user.'
+                break
+            if now - last_progress >= 0.2:
+                report(now)
+                last_progress = now
             if now - start > duration + settling + 10:
                 reason = 'Recording timed out.'
                 break
@@ -85,6 +107,7 @@ def record(duration=60, settling=10):
                     announced = True
             if reason:
                 break
+        report(time.monotonic())
         sensor.shutdown()
         if sensor.bus.read_byte_data(sensor.address, 0x05) & 0x1F:
             reason = 'FIFO overflow detected at end of capture.'
@@ -97,6 +120,8 @@ def record(duration=60, settling=10):
     rate = None
     if len(measured) > 1:
         rate = (len(measured) - 1) / (measured[-1][1] - measured[0][1])
+    if not reason and len(rows) != target:
+        reason = 'Recording incomplete.'
     if not reason and (rate is None or abs(rate - FS) > 5):
         reason = 'Observed read rate differs from nominal 100 Hz by over 5%.'
     metadata = dict(nominal_sample_rate_hz=FS, host_observed_rate_hz=rate,
@@ -108,9 +133,12 @@ def record(duration=60, settling=10):
 
 # These are engineering thresholds for a resting fingertip prototype.
 # They are NOT normal/abnormal HRV limits and have not been clinically validated.
-VERSION = 'finger-prv-2'
-MIN_RUN_SECONDS = 30.0
-MIN_INTERVALS = 30
+VERSION = 'finger-prv-3-20s'
+MIN_RUN_SECONDS = 12.0
+MIN_INTERVALS = 10
+MIN_BPM_SECONDS = 5.0
+MIN_BPM_INTERVALS = 4
+MIN_INPUT_SECONDS = 20.0
 SECTION_SECONDS = 10
 
 
@@ -159,6 +187,11 @@ def analyse(red, ir):
     result = dict(version=VERSION, status='insufficient_signal_quality',
                   measurement='Fingertip PPG pulse-rate variability (PRV)',
                   pulse_rate_bpm=None, rmssd_ms=None, score=None,
+                  signal_quality_score=None, score_type='signal_quality_coverage',
+                  score_label='Signal quality (experimental)',
+                  score_definition='100 times accepted interval seconds divided by assessable seconds; excludes 2s at each filter edge. Not accuracy or concussion probability.',
+                  accepted_interval_seconds=0.0, assessable_seconds=max(0.0, len(ir) / FS - 4),
+                  bpm_selected_seconds=0.0, bpm_interval_count=0,
                   analysed_seconds=len(ir) / FS, selected_seconds=0.0,
                   reasons=[], warnings=[], sections=[],
                   quality_rules='Provisional engineering rules; accuracy not established',
@@ -166,8 +199,8 @@ def analyse(red, ir):
                   minimum_intervals=MIN_INTERVALS)
     diagnostics = dict(peaks=np.array([], dtype=int), intervals=[], filtered=np.array([]),
                        raw_ir=ir, raw_red=red, selected_start=None, selected_end=None)
-    if len(ir) != len(red) or len(ir) < 55 * FS:
-        result['reasons'].append('Need at least 55 seconds of paired red/infrared data.')
+    if len(ir) != len(red) or len(ir) < MIN_INPUT_SECONDS * FS:
+        result['reasons'].append(f'Need at least {MIN_INPUT_SECONDS:g} seconds of paired red/infrared data.')
         return result, diagnostics
     if not np.isfinite(ir).all() or not np.isfinite(red).all():
         result['reasons'].append('Missing/non-finite samples. Do not join across missing data.')
@@ -266,12 +299,23 @@ def analyse(red, ir):
             item['accepted'] = False
             item['reasons'].append('Interval differs from neighbouring pulse spacing.')
     diagnostics['intervals'] = intervals
+    # Score describes usable coverage only, not diagnostic confidence.
+    accepted_seconds = sum(i['interval_ms'] for i in intervals if i['accepted']) / 1000
+    assessable = result['assessable_seconds']
+    quality = round(100 * min(1.0, accepted_seconds / assessable), 1) if assessable else 0.0
+    result.update(signal_quality_score=quality, score=quality,
+                  accepted_interval_seconds=round(accepted_seconds, 3))
     runs = contiguous_runs([i['accepted'] for i in intervals])
     if runs:
         first, last = max(runs, key=lambda run: sum(i['interval_ms'] for i in intervals[run[0]:run[1]]))
         chosen = intervals[first:last]
         seconds = sum(i['interval_ms'] for i in chosen) / 1000
         result['longest_usable_run_seconds'] = round(seconds, 2)
+        if seconds >= MIN_BPM_SECONDS and len(chosen) >= MIN_BPM_INTERVALS:
+            result.update(status='prototype_pulse_rate_only',
+                pulse_rate_bpm=60000 / float(np.mean([i['interval_ms'] for i in chosen])),
+                bpm_selected_seconds=round(seconds, 2), bpm_interval_count=len(chosen),
+                bpm_selected_start_s=chosen[0]['start_s'], bpm_selected_end_s=chosen[-1]['end_s'])
         if seconds >= MIN_RUN_SECONDS and len(chosen) >= MIN_INTERVALS:
             for item in chosen:
                 item['selected'] = True
@@ -280,10 +324,13 @@ def analyse(red, ir):
                           selected_start_s=chosen[0]['start_s'], selected_end_s=chosen[-1]['end_s'])
             diagnostics.update(selected_start=chosen[0]['start_s'], selected_end=chosen[-1]['end_s'])
             result['warnings'].append('Result uses only the selected continuous section, not the complete recording.')
+    if result['pulse_rate_bpm'] is None:
+        result['reasons'].append(f'BPM needs at least {MIN_BPM_SECONDS:g}s and {MIN_BPM_INTERVALS} consecutive accepted intervals.')
     if result['rmssd_ms'] is None:
         result['reasons'].append(f'No continuous accepted section of at least {MIN_RUN_SECONDS:g}s and {MIN_INTERVALS} intervals.')
     if any(s['red_ir_correlation'] is not None and s['red_ir_correlation'] < 0.8 for s in result['sections']):
         result['warnings'].append('Red/infrared agreement is weak in some sections. Check the diagnostic graph.')
+    result['warnings'].append('20-second PRV is experimental; these duration and quality rules require validation.')
     result['warnings'].append('Checks cannot prove beat accuracy. Compare with reference beat intervals before relying on RMSSD.')
     return result, diagnostics
 
@@ -340,7 +387,7 @@ def main():
     output = Path(__file__).resolve().parent / 'recordings'
     output.mkdir(exist_ok=True)
     stamp = datetime.now().strftime('%Y%m%d_%H%M%S_%f')
-    prefix = output / f'prv_v2_{stamp}'
+    prefix = output / f'prv_v3_{stamp}'
     if args.csv:
         with args.csv.open(newline='') as file:
             data = list(csv.DictReader(file))
@@ -375,7 +422,8 @@ def main():
     ir = np.asarray([r[3] for r in measured], dtype=float)
     result, diagnostics = analyse(red, ir)
     if metadata.get('acquisition_error'):
-        result.update(status='recording_failed', pulse_rate_bpm=None, rmssd_ms=None, selected_seconds=0)
+        result.update(status='recording_failed', pulse_rate_bpm=None, rmssd_ms=None, selected_seconds=0,
+                      signal_quality_score=None, score=None, bpm_selected_seconds=0, bpm_interval_count=0)
         result['reasons'].insert(0, metadata['acquisition_error'])
         for interval in diagnostics['intervals']:
             interval['selected'] = False
@@ -391,15 +439,17 @@ def main():
         for item in diagnostics['intervals']:
             writer.writerow({**item, 'reasons': '; '.join(item['reasons'])})
     print('\nRESULT:', result['status'])
+    if result['pulse_rate_bpm'] is not None:
+        print(f"Pulse-rate estimate: {result['pulse_rate_bpm']:.1f} BPM")
+    print('Signal quality:', result['signal_quality_score'], '/ 100 (usable coverage, not diagnostic confidence)')
     if result['rmssd_ms'] is not None:
         print(f"Selected continuous section: {result['selected_start_s']:.2f}–{result['selected_end_s']:.2f}s ({result['selected_seconds']:.2f}s)")
-        print(f"Pulse-rate estimate: {result['pulse_rate_bpm']:.1f} BPM")
         print(f"PRV RMSSD estimate: {result['rmssd_ms']:.2f} ms")
         print('Prototype segment estimate; accuracy is not established.')
     else:
         for reason in result['reasons']:
             print(' -', reason)
-        print('Pulse rate and RMSSD withheld.')
+        print('PRV RMSSD withheld.' if result['pulse_rate_bpm'] is not None else 'Pulse rate and PRV RMSSD withheld.')
         print('Longest usable run:', result.get('longest_usable_run_seconds', 0), 'seconds')
     for section in result['sections']:
         if not section['accepted']:
