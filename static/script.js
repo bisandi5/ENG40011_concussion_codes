@@ -17,6 +17,7 @@ let hrvState = null;
 let cameraState = null;
 let accelState = null;
 let cameraWasRunning = false;
+let cameraSession = null;
 
 function badge(id, text, type) {
     byId(id).textContent = text;
@@ -30,10 +31,10 @@ function hrvButtons() {
 function cameraButtons() {
     const available = cameraState !== null && !pending.has('camera');
     byId('camera-start').disabled = !available || cameraState.running;
-    byId('camera-stop').disabled = !available || !cameraState.running;
+    byId('camera-stop').disabled = !available || !cameraState.running || cameraState.stage === 'Stopping';
     byId('camera-next').disabled = !available || !cameraState.running ||
         !['PUPIL_BLINK','READY_JITTER','READY_PURSUIT'].includes(cameraState.stage) ||
-        (cameraState.stage === 'PUPIL_BLINK' && cameraState.pupil_mm == null);
+        !cameraState.can_continue;
 }
 async function command(path, group) {
     if (pending.has(group)) return;
@@ -135,28 +136,50 @@ const cameraInstructions = {
     PUPIL_BLINK:'Wait for a pupil measurement, then press Continue eye test.',
     READY_JITTER:'Look at the centre dot. Press Continue eye test to start fixation.',
     TESTING_JITTER:'Keep looking at the centre dot.',
-    READY_PURSUIT:'Press Continue eye test, then follow the moving dot.',
-    TESTING_PURSUIT:'Follow the moving target and keep your head still.',
-    SUMMARY:'Eye test finished. Stop the camera when ready.'
+    READY_PURSUIT:'Press Continue eye test, then follow the physical LEDs left and right.',
+    TESTING_PURSUIT:'Follow the physical LEDs with your eyes and keep your head still.',
+    SUMMARY:'Eye test finished. Download your result before stopping or starting again.',
+    Stopping:'Stopping the camera and switching off the LEDs…'
 };
-async function pollCamera() {
-    try {
-        const response = await fetch('/api/status', {cache:'no-store'});
-        if (!response.ok) throw new Error('Camera status unavailable');
-        const s = await response.json(); cameraState = s;
+function renderCamera(s) {
+        cameraState = s;
         badge('camera-status', s.stage.replaceAll('_',' '), s.running ? 'reading' : 'disconnected');
         byId('camera-instruction').textContent = cameraInstructions[s.stage] || 'Camera controls are separate from the HRV test.';
         byId('camera-error').textContent = s.error || '';
         byId('camera-pupil').textContent = format(s.pupil_mm, 2);
         byId('camera-blink').textContent = format(s.blink_rate);
-        if (s.running && !cameraWasRunning) {
+        byId('camera-tracking').textContent = s.face_detected ? (s.is_blinking ? 'Blink detected' : 'Face detected') : 'No face detected';
+        byId('camera-elapsed').textContent = format(s.elapsed);
+        byId('camera-fixation').textContent = s.fixation_grade || '—';
+        byId('camera-jitter').textContent = format(s.rms_jitter, 2);
+        byId('camera-pursuit').textContent = s.pursuit_grade || '—';
+        byId('camera-gain').textContent = format(s.pursuit_gain, 2);
+        byId('camera-pursuit-error').textContent = format(s.pursuit_error, 2);
+        const hasScore = s.stage === 'SUMMARY' && typeof s.score === 'number' && Number.isFinite(s.score) && s.score >= 0 && s.score <= 100;
+        byId('camera-score').textContent = hasScore ? format(s.score) + '%' : 'Unavailable';
+        byId('camera-score-note').textContent = s.score_note || 'Complete the eye test to obtain a model output.';
+        byId('camera-download').hidden = s.stage !== 'SUMMARY';
+        byId('camera-warnings').replaceChildren();
+        for (const warning of s.warnings || []) {
+            const li = document.createElement('li'); li.textContent = warning; byId('camera-warnings').append(li);
+        }
+        if (s.running && (!cameraWasRunning || cameraSession !== s.session_id)) {
             byId('camera-preview').hidden = false;
             byId('camera-preview').src = '/video_feed?t=' + Date.now();
         }
         cameraWasRunning = s.running;
+        cameraSession = s.session_id;
         cameraButtons();
+}
+async function pollCamera() {
+    try {
+        const response = await fetch('/api/status', {cache:'no-store'});
+        if (!response.ok) throw new Error('Camera status unavailable');
+        renderCamera(await response.json());
     } catch (error) {
         cameraState = null; cameraButtons();
+        byId('camera-score').textContent = 'Unavailable';
+        byId('camera-download').hidden = true;
         byId('camera-error').textContent = 'Camera controls unavailable. HRV can still be used if connected.';
     }
 }

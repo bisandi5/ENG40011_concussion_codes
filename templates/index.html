@@ -9,7 +9,7 @@
 <body>
 <main>
     <h1>Headband Dashboard</h1>
-    <p>Record fingertip pulse data from the sensor connected to the Raspberry Pi.</p>
+    <p>Record pulse, movement and eye-tracking tests from sensors connected to the Raspberry Pi.</p>
 
     <section aria-labelledby="recording-title">
         <h2 id="recording-title">Heart-rate recording</h2>
@@ -96,9 +96,16 @@
         <button id="camera-stop" type="button" disabled>Stop camera</button>
         <p id="camera-command-error" class="error" role="alert"></p>
         <p id="camera-error" class="error" role="alert"></p>
-        <img id="camera-preview" alt="Live preview from the Pi camera" hidden>
+        <img id="camera-preview" alt="Live preview from the Pi camera" style="max-width:100%;height:auto" hidden>
         <p>Pupil estimate: <strong id="camera-pupil">—</strong> mm | Blink rate: <strong id="camera-blink">—</strong> blinks/min</p>
-        <p>Camera processing uses your existing camera_web.py.</p>
+        <p>Face tracking: <strong id="camera-tracking">—</strong> | Elapsed: <strong id="camera-elapsed">0</strong> seconds</p>
+        <p>Fixation: <strong id="camera-fixation">—</strong> | RMS jitter: <strong id="camera-jitter">—</strong> estimated degrees</p>
+        <p>Pursuit: <strong id="camera-pursuit">—</strong> | Gain: <strong id="camera-gain">—</strong> | Error: <strong id="camera-pursuit-error">—</strong> estimated degrees</p>
+        <p>Experimental camera model output: <strong id="camera-score">—</strong></p>
+        <p id="camera-score-note">Complete the eye test to obtain a model output.</p>
+        <ul id="camera-warnings"></ul>
+        <a id="camera-download" href="/api/camera/result" download hidden>Download eye-test result (JSON)</a>
+        <p>Follow the physical LEDs during pursuit. Keep the camera facing your eyes. Each camera session times out after 3 minutes.</p>
     </section>
 </main>
 <script src="{{ url_for('static', filename='script.js') }}"></script>
